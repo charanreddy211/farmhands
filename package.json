@@ -1,0 +1,32 @@
+{
+  "name": "farmhands",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "start": "npx --no-install expo start",
+    "android": "npx --no-install expo start --android",
+    "ios": "npx --no-install expo start --ios",
+    "web": "npx --no-install expo start --web",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@expo/metro-runtime": "~3.2.3",
+    "@expo/vector-icons": "^14.0.0",
+    "@react-native-community/datetimepicker": "8.0.1",
+    "expo": "~51.0.39",
+    "expo-font": "~12.0.10",
+    "expo-status-bar": "~1.12.1",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "react-native": "0.74.5",
+    "react-native-web": "~0.19.10"
+  },
+  "devDependencies": {
+    "@types/react": "~18.2.79",
+    "typescript": "^5.5.4"
+  }
+}

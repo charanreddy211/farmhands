@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: farmhands-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: farmhands
+      POSTGRES_PASSWORD: farmhands
+      POSTGRES_DB: farmhands
+    ports:
+      - "5432:5432"
+    volumes:
+      - farmhands-postgres-data:/var/lib/postgresql/data
+
+volumes:
+  farmhands-postgres-data:
