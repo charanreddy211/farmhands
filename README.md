@@ -41,3 +41,4 @@ API routes:
 - `POST /api/auth/verify-otp`
 
 Recommended production database: PostgreSQL with Prisma. Suggested tables are `profiles`, `farms`, `labour_groups`, `group_members`, `availability`, `labour_requests`, `applications`, `messages`, `reviews`, and `notifications`.
+
