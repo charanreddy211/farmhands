@@ -1,0 +1,33 @@
+flowchart TD
+  SignIn[Sign in] --> Language[Choose language]
+  Language --> Role[Choose Farmer or Labour]
+  Role --> FarmerHome[Farmer Home]
+  Role --> LabourHome[Labour Home]
+
+  subgraph Farmer["Farmer flow"]
+    FarmerHome --> FindWorkers[Find workers]
+    FindWorkers --> SelectDates[Choose work dates and people]
+    SelectDates --> SendRequest[Send request]
+    SendRequest --> WorkerResponse[Worker accepts or declines]
+    WorkerResponse --> BookingStatus[Booking status updates]
+    BookingStatus --> WorkerContact[Farmer can view worker phone after acceptance]
+    FarmerHome --> FarmerRequests[Requests and bookings]
+  end
+
+  subgraph Labour["Labour flow"]
+    LabourHome --> WeeklyManager[Weekly Availability and Shifts]
+    WeeklyManager --> WeeklyDays[Show today and the next six days]
+    WeeklyManager --> DayStatus[Count free days including today]
+    WeeklyManager --> Shift[Choose Morning or Full day]
+    WeeklyManager --> MonthlyCalendar[Full calendar]
+    WeeklyDays --> PersistAvailability[Save date-specific availability]
+    Shift --> PersistShift[Save preferred shift]
+    LabourHome --> LabourRequests[Review farmer requests]
+    LabourRequests --> Response[Accept or decline]
+    Response --> BookingLock[Confirmed dates show Booked and cannot be changed]
+    BookingLock --> MonthlyCalendar
+    PersistAvailability --> WorkerSearch[Availability shown in farmer search]
+    PersistShift --> WorkerSearch
+  end
+
+  Note[Same-day availability and requests close at 7:00 a.m. India time] -.-> WeeklyManager
