@@ -1,7 +1,7 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class CreateFarmhandsBaseTables1761330800000 implements MigrationInterface {
-  name = 'CreateFarmhandsBaseTables1761330800000';
+export class CreateFarmhandsBaseTables1739999999999 implements MigrationInterface {
+  name = 'CreateFarmhandsBaseTables1739999999999';
 
   async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`CREATE EXTENSION IF NOT EXISTS "uuid-ossp"`);
