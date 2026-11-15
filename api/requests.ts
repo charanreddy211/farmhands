@@ -73,7 +73,7 @@ export type BookingDetails = {
   farmer: NonNullable<BookingListItem['farmer']> & { phone: string | null; farmMapLink: string | null };
 };
 
-export const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'http://localhost:3000/api';
+export const API_URL = process.env.EXPO_PUBLIC_API_URL ?? 'https://farmhands-73ad.onrender.com/api'; //'http://localhost:3000/api';
 
 async function readResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {

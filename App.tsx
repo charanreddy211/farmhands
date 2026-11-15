@@ -242,8 +242,29 @@ export default function App() {
     setProfileError('');
     fetchProfile(userId)
       .then((userProfile) => { if (active) setProfile(userProfile); })
-      .catch(() => {
+      .catch(async (error: unknown) => {
         if (!active) return;
+        if (error instanceof Error && error.message === 'User profile not found') {
+          try {
+            await AsyncStorage.removeItem(SESSION_STORAGE_KEY);
+          } catch (storageError) {
+            if (active) {
+              setProfile(null);
+              setProfileError(storageError instanceof Error
+                ? `Could not clear the saved sign-in: ${storageError.message}`
+                : 'Could not clear the saved sign-in.');
+            }
+            return;
+          }
+          if (!active) return;
+          setOtp('');
+          setOtpRequested(false);
+          setUserId(null);
+          setUserPhone(null);
+          setProfile(null);
+          setProfileError('');
+          return;
+        }
         setProfile(null);
         setProfileError('Could not load your profile. Check your connection and try again.');
       })
@@ -356,7 +377,7 @@ export default function App() {
             <Text style={authStyles.publishText}>{authLoading ? 'Please wait…' : otpRequested ? 'Verify' : 'Continue'}</Text>
           </Pressable>
         </View>
-      </ScrollView> : profileLoading ? <View style={authStyles.restoringSession}><ActivityIndicator color="#2563EB" /><Text style={authStyles.restoringText}>Loading your profile…</Text></View> : profileError ? <View style={authStyles.restoringSession}><Text style={styles.authError}>{profileError}</Text><Pressable style={authStyles.publishButton} onPress={() => setProfileLoadAttempt((attempt) => attempt + 1)} accessibilityRole="button"><Text style={authStyles.publishText}>Retry</Text></Pressable></View> : profile && (profile.roles.length === 0 || (profile.roles.includes('farmer') && !profile.onboardingComplete)) && userId ? <OnboardingScreen
+      </ScrollView> : profileLoading ? <View style={authStyles.restoringSession}><ActivityIndicator color="#2563EB" /><Text style={authStyles.restoringText}>Loading your profile…</Text></View> : profileError ? <View style={authStyles.restoringSession}><Text style={styles.authError}>{profileError}</Text><Pressable style={authStyles.publishButton} onPress={() => setProfileLoadAttempt((attempt) => attempt + 1)} accessibilityRole="button"><Text style={authStyles.publishText}>Retry</Text></Pressable><Pressable style={authStyles.publishButton} onPress={() => { void signOut(); }} accessibilityRole="button"><Text style={authStyles.publishText}>Sign in again</Text></Pressable></View> : profile && (profile.roles.length === 0 || (profile.roles.includes('farmer') && !profile.onboardingComplete)) && userId ? <OnboardingScreen
         key={`onboarding-${userId}`}
         userId={userId}
         profile={profile}
