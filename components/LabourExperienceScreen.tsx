@@ -571,8 +571,8 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
           {locating ? <ActivityIndicator color={colors.primary} /> : <Icon name="location-outline" size={18} color={colors.primary} />}
           <Text style={styles.secondaryButtonText}>{locating ? 'Finding location…' : locationCoordinates ? 'Location selected for nearby search' : locationSaved ? 'Location saved for nearby search' : 'Use my current location'}</Text>
         </Pressable>
-        <Field label="How far can you travel? (km)" value={travelRadius} onChangeText={setTravelRadius} placeholder="25" keyboardType="number-pad" />
-        <Field label="Daily rate (₹)" value={rate} onChangeText={setRate} placeholder="600" keyboardType="number-pad" />
+        <Field label="How far can you travel? (km)" value={travelRadius} onChangeText={setTravelRadius} placeholder="Enter distance in km" keyboardType="number-pad" />
+        <Field label="Your daily rate (₹ per day)" value={rate} onChangeText={setRate} placeholder="Enter your rate" keyboardType="number-pad" />
       </>}
 
       {screen === 'skills' && <>
