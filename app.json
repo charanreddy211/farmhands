@@ -24,7 +24,13 @@
       "bundler": "metro"
     },
     "plugins": [
-      "expo-font"
+      "expo-font",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow Farmhands to use your location to set your home address."
+        }
+      ]
     ]
   }
 }

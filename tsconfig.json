@@ -5,6 +5,7 @@
     "jsx": "react-native",
     "moduleResolution": "node",
     "target": "es2020",
+    "experimentalDecorators": true,
     "skipLibCheck": true
   },
   "include": [

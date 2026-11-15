@@ -1,48 +1,59 @@
-import { Injectable } from '@nestjs/common';
-
-export interface LabourGroup {
-  id: string;
-  name: string;
-  area: string;
-  members: number;
-  skills: string[];
-  available: boolean;
-  nextDate: string;
-}
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { User } from '../users/user.entity';
+import { SaveLabourGroupDto } from './dto/save-labour-group.dto';
+import { LabourGroup } from './labour-group.entity';
+import { labourGroupCapacity } from './group-capacity';
 
 @Injectable()
 export class GroupsService {
-  private readonly groups: LabourGroup[] = [
-    {
-      id: 'group-green-valley',
-      name: 'Green Valley Crew',
-      area: 'Sira, Tumakuru',
-      members: 12,
-      skills: ['Harvesting', 'Sorting'],
-      available: true,
-      nextDate: 'Available today',
-    },
-    {
-      id: 'group-kaveri-field',
-      name: 'Kaveri Field Team',
-      area: 'Maddur, Mandya',
-      members: 8,
-      skills: ['Transplanting', 'Irrigation'],
-      available: true,
-      nextDate: 'From tomorrow',
-    },
-    {
-      id: 'group-sunrise-women',
-      name: 'Sunrise Women Farmers',
-      area: 'Channapatna',
-      members: 15,
-      skills: ['Picking', 'Packing'],
-      available: false,
-      nextDate: 'Available 24 Sep',
-    },
-  ];
+  constructor(
+    @InjectRepository(LabourGroup) private readonly groups: Repository<LabourGroup>,
+    @InjectRepository(User) private readonly users: Repository<User>,
+  ) {}
 
-  findAll(availableOnly = false): LabourGroup[] {
-    return availableOnly ? this.groups.filter((group) => group.available) : this.groups;
+  async findForLeader(leaderId: string) {
+    await this.requireLabourLeader(leaderId);
+    const group = await this.groups.findOne({ where: { leaderId } });
+    return group ? {
+      ...group,
+      availableMemberNames: group.availableMemberNames ?? group.memberNames,
+      size: labourGroupCapacity(group),
+    } : null;
+  }
+
+  async save(leaderId: string, input: SaveLabourGroupDto) {
+    await this.requireLabourLeader(leaderId);
+    if (!input.name.trim()) throw new BadRequestException('Enter a group name.');
+    const memberNames = input.memberNames.map((name) => name.trim()).filter(Boolean);
+    if (memberNames.length !== input.memberNames.length) {
+      throw new BadRequestException('Remove blank names from the group roster before saving.');
+    }
+    if (new Set(memberNames.map((name) => name.toLocaleLowerCase())).size !== memberNames.length) {
+      throw new BadRequestException('Each group member must have a unique name.');
+    }
+    const activeNames = input.availableMemberNames ?? memberNames;
+    const memberNameSet = new Set(memberNames.map((memberName) => memberName.toLocaleLowerCase()));
+    if (activeNames.some((memberName) => !memberNameSet.has(memberName.trim().toLocaleLowerCase()))) {
+      throw new BadRequestException('Only names on your group roster can be marked ready to work.');
+    }
+    const availableMemberNames = memberNames.filter((memberName) =>
+      activeNames.some((activeName) => activeName.trim().toLocaleLowerCase() === memberName.toLocaleLowerCase()));
+    const group = await this.groups.save(this.groups.create({
+      leaderId,
+      name: input.name.trim(),
+      memberNames,
+      availableMemberNames,
+      workAsGroup: true,
+    }));
+    return { ...group, size: labourGroupCapacity(group) };
+  }
+
+  private async requireLabourLeader(leaderId: string): Promise<User> {
+    const user = await this.users.findOne({ where: { id: leaderId } });
+    if (!user) throw new NotFoundException('Worker profile not found.');
+    if (!user.roles.includes('labour')) throw new ForbiddenException('Only labour profiles can manage a work group.');
+    return user;
   }
 }
