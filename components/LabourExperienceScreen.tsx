@@ -413,6 +413,20 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
     }, 'home');
   }
 
+  async function reloadGroupSize() {
+    setGroupLoading(true);
+    setGroupError('');
+    try {
+      const group = await fetchLabourGroup(userId);
+      setGroupCapacity(group?.size ?? 1);
+      setGroupMemberNames(group?.memberNames ?? []);
+    } catch (loadError) {
+      setGroupError(loadError instanceof Error ? loadError.message : 'Could not load your available group size.');
+    } finally {
+      setGroupLoading(false);
+    }
+  }
+
   function toggleWeekday(date: Date) {
     const key = dateKey(date);
     if (bookingsLoading || bookingsError || bookedDates.has(key)) return;
@@ -603,14 +617,7 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
           {!!bookingsError && <Pressable onPress={() => { void refreshBookedDates(); }} accessibilityRole="button">
             <Text style={styles.calendarLink}>Retry</Text>
           </Pressable>}
-          {!!groupError && <Pressable onPress={() => {
-            setGroupLoading(true);
-            setGroupError('');
-            void fetchLabourGroup(userId)
-              .then((group) => setGroupCapacity(group?.size ?? 1))
-              .catch((loadError) => setGroupError(loadError instanceof Error ? loadError.message : 'Could not load your available group size.'))
-              .finally(() => setGroupLoading(false));
-          }} accessibilityRole="button">
+          {!!groupError && <Pressable onPress={() => { void reloadGroupSize(); }} disabled={groupLoading} accessibilityRole="button">
             <Text style={styles.calendarLink}>Retry group size</Text>
           </Pressable>}
           {!canSetSameDayAvailability(now) && <Text style={styles.cutoffNote}>Same-day availability closes at 7:00 a.m. India time.</Text>}
@@ -708,7 +715,7 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
               const capacity = availabilityCapacity(key);
               const disabled = saving || bookingsLoading || !!bookingsError || groupLoading || booked || (today && !canSetSameDayAvailability(now));
               const status = booked ? 'Booked'
-                : available ? groupLoading ? '…' : groupError ? 'Unavailable' : `${capacity} free`
+                : available ? groupLoading ? '…' : `${capacity} free`
                   : 'Off';
               return <Pressable
                 key={key}
@@ -734,7 +741,14 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
             })}
           </View>
           <View style={styles.weeklyFooter}>
-            <Text style={styles.cardText}>{groupLoading ? 'Loading group size…' : groupError ? 'Group size unavailable' : 'Choose solo or your ready group for each date.'}</Text>
+            <Text style={styles.cardText}>{groupLoading
+              ? 'Loading group size…'
+              : groupError
+                ? 'Group size unavailable; selected days are still open for solo work.'
+                : 'Choose solo or your ready group for each date.'}</Text>
+            {!!groupError && <Pressable onPress={() => { void reloadGroupSize(); }} disabled={groupLoading} accessibilityRole="button">
+              <Text style={styles.calendarLink}>Retry</Text>
+            </Pressable>}
             <Pressable onPress={() => navigateScreen('availability')} accessibilityRole="button" accessibilityLabel="Open full availability calendar">
               <Text style={styles.calendarLink}>Full calendar</Text>
             </Pressable>

@@ -47,6 +47,14 @@ function daysBetween(start: Date, end: Date): number {
   return Math.floor((Date.UTC(end.getFullYear(), end.getMonth(), end.getDate()) - Date.UTC(start.getFullYear(), start.getMonth(), start.getDate())) / 86400000) + 1;
 }
 
+function workerSelectionSummary(worker: WorkerProfile): string {
+  const people = worker.groupSize ?? 1;
+  const distance = worker.distanceKm === null
+    ? 'GPS distance unavailable'
+    : `about ${worker.distanceKm.toFixed(1)} km away`;
+  return `${people} ${people === 1 ? 'person' : 'people'} · ${distance}`;
+}
+
 function Icon({ name, size = 20, color = colors.text }: { name: keyof typeof Ionicons.glyphMap; size?: number; color?: string }) {
   return <Ionicons name={name} size={size} color={color} />;
 }
@@ -257,7 +265,7 @@ export default function NewRequestScreen({ farmerId, profile, selectedWorkers, i
         <Text style={styles.successTitle}>Request saved</Text>
         <Text style={styles.successSubtitle}>Your request is now recorded. Worker response and alert delivery will be available in a later step.</Text>
         <View style={styles.summaryCard}>
-          {selectedWorkers.map((worker) => <SummaryRow key={worker.id} icon="people-outline" label={worker.name} value={`${worker.groupSize ?? 1} ${(worker.groupSize ?? 1) === 1 ? 'person' : 'people'}`} />)}
+          {selectedWorkers.map((worker) => <SummaryRow key={worker.id} icon="people-outline" label={worker.name} value={workerSelectionSummary(worker)} />)}
           <SummaryRow icon="calendar-outline" label="Dates" value={dateRangeLabel(createdRequest.startDate, createdRequest.endDate)} />
           <SummaryRow icon="reader-outline" label="Work" value={createdRequest.workType} />
           <SummaryRow icon="leaf-outline" label="Crop" value={createdRequest.crop} />
@@ -368,8 +376,9 @@ export default function NewRequestScreen({ farmerId, profile, selectedWorkers, i
       </>}
 
       {step === 'review' && <>
+        <Text style={styles.sectionSubtitle}>Distances are straight-line estimates from your Find workers location. Make sure it matches the farm selected below.</Text>
         <View style={styles.summaryCard}>
-          {selectedWorkers.map((worker) => <SummaryRow key={worker.id} icon="people-outline" label={worker.name} value={`${worker.groupSize ?? 1} ${(worker.groupSize ?? 1) === 1 ? 'person' : 'people'}`} />)}
+          {selectedWorkers.map((worker) => <SummaryRow key={worker.id} icon="people-outline" label={worker.name} value={workerSelectionSummary(worker)} />)}
           <SummaryRow icon="calendar-outline" label="Dates" value={startDate && endDate ? dateRangeLabel(dateInputValue(startDate), dateInputValue(endDate)) : ''} />
           <SummaryRow icon="reader-outline" label="Work" value={workType} />
           <SummaryRow icon="leaf-outline" label="Crop" value={crop} />

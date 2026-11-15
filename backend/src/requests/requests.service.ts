@@ -9,6 +9,7 @@ import { Booking, BookingCancellationReason, BookingStatus } from './booking.ent
 import { BookingCancellationReasonDto } from './dto/cancel-booking.dto';
 import { User } from '../users/user.entity';
 import { labourAvailabilityRangeCapacity } from '../groups/group-capacity';
+import { distanceInKm } from '../common/distance';
 import { currentFarmDate, isSameDayAvailabilityOpen } from '../common/farm-time';
 
 export type RequestStatus = RequestEntity['status'];
@@ -186,6 +187,20 @@ export class RequestsService {
 
     return visible.map((recipient) => {
       const farmer = recipient.request.farmerId ? farmerById.get(recipient.request.farmerId) : undefined;
+      const farm = recipient.request.farmLocationId
+        ? farmer?.farms?.find((location) => location.id === recipient.request.farmLocationId)
+        : undefined;
+      const workerCoordinates = typeof worker.labourLatitude === 'number' && Number.isFinite(worker.labourLatitude)
+        && typeof worker.labourLongitude === 'number' && Number.isFinite(worker.labourLongitude)
+        ? { latitude: worker.labourLatitude, longitude: worker.labourLongitude }
+        : null;
+      const farmCoordinates = typeof farm?.latitude === 'number' && Number.isFinite(farm.latitude)
+        && typeof farm.longitude === 'number' && Number.isFinite(farm.longitude)
+        ? { latitude: farm.latitude, longitude: farm.longitude }
+        : null;
+      const rawDistanceKm = workerCoordinates && farmCoordinates
+        ? distanceInKm(workerCoordinates, farmCoordinates)
+        : null;
       return {
         request: {
           id: recipient.request.id,
@@ -200,6 +215,7 @@ export class RequestsService {
           status: recipient.request.status,
         },
         responseStatus: recipient.status,
+        distanceKm: rawDistanceKm === null ? null : Math.round(rawDistanceKm * 10) / 10,
         declineReason: recipient.declineReason,
         maxAcceptingPeople: Math.min(
           labourAvailabilityRangeCapacity(

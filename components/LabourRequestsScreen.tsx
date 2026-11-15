@@ -69,6 +69,12 @@ function declineReasonLabel(reason: RequestDeclineReason | null): string | null 
   return declineReasons.find((item) => item.value === reason)?.label ?? reason;
 }
 
+function distanceLabel(distanceKm: number | null | undefined): string {
+  return typeof distanceKm === 'number'
+    ? `${distanceKm.toFixed(1)} km (straight-line estimate)`
+    : 'Unavailable — GPS pin missing';
+}
+
 export default function LabourRequestsScreen({ workerId, onBackToHome, onOpenProfile }: Props) {
   const [bucket, setBucket] = useState<WorkerRequestBucket>('new');
   const [requests, setRequests] = useState<Record<WorkerRequestBucket, WorkerRequest[]>>({
@@ -246,7 +252,8 @@ export default function LabourRequestsScreen({ workerId, onBackToHome, onOpenPro
         <DetailRow icon="leaf-outline" label="Crop" value={detail.request.crop} />
         <DetailRow icon="people-outline" label="People needed" value={String(detail.request.peopleNeeded)} />
         <DetailRow icon="cash-outline" label="Pay per day" value={`₹${detail.request.payPerDay.toLocaleString('en-IN')}`} />
-        <DetailRow icon="location-outline" label="Farm location" value={detail.request.area} last={!bookingDetails?.farmer.phone} />
+        <DetailRow icon="location-outline" label="Farm location" value={detail.request.area} />
+        <DetailRow icon="navigate-outline" label="Distance to farm" value={distanceLabel(detail.distanceKm)} last={!bookingDetails?.farmer.phone} />
         {bookingDetails?.farmer.phone && <DetailRow icon="call-outline" label="Farmer phone" value={bookingDetails.farmer.phone} />}
       </View>
       {detail.responseStatus === 'pending' && <View style={styles.detailActions}>
@@ -328,6 +335,8 @@ export default function LabourRequestsScreen({ workerId, onBackToHome, onOpenPro
               ? `The farmer requested ${selectedRequest.request.peopleNeeded} people.`
               : 'No places remain on this request. Refresh your requests to check for updates.'}
           </Text>
+          <Text style={styles.helperText}>Distance to farm: {distanceLabel(selectedRequest?.distanceKm)}</Text>
+          {selectedRequest?.distanceKm == null && <Text style={styles.helperText}>Save GPS pins for your work location and the farmer’s farm to calculate distance.</Text>}
           {!!error && <Text style={styles.errorText} accessibilityRole="alert">{error}</Text>}
           <Pressable
             style={[styles.primaryButton, (!selectedRequest?.maxAcceptingPeople || responding) && styles.buttonDisabled]}

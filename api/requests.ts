@@ -37,6 +37,7 @@ export type RequestDeclineReason = 'already_booked' | 'too_far' | 'pay_too_low' 
 export type WorkerRequest = {
   request: Pick<LabourRequest, 'id' | 'title' | 'workType' | 'crop' | 'area' | 'startDate' | 'endDate' | 'peopleNeeded' | 'payPerDay' | 'status'>;
   responseStatus: 'pending' | 'accepted' | 'declined' | 'expired' | 'cancelled';
+  distanceKm: number | null;
   declineReason: RequestDeclineReason | null;
   maxAcceptingPeople: number;
   respondedAt: string | null;

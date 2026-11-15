@@ -13,6 +13,8 @@ import { WorkerSearchAlert } from './worker-search-alert.entity';
 import { SavedWorker } from './saved-worker.entity';
 import { LabourGroup } from '../groups/labour-group.entity';
 import { labourAvailabilityCapacity, labourAvailabilityRangeCapacity, labourGroupCapacity } from '../groups/group-capacity';
+import { distanceInKm } from '../common/distance';
+import type { Coordinates } from '../common/distance';
 import { currentFarmDate, filterCurrentAvailabilityDates, isSameDayAvailabilityOpen } from '../common/farm-time';
 
 type WorkerSearchInput = {
@@ -28,7 +30,6 @@ type WorkerSearchInput = {
   workedWithMe: boolean;
 };
 
-type Coordinates = { latitude: number; longitude: number };
 const DISTANCE_RANGES_KM = [3, 5, 7, 10, 15, 20] as const;
 const DISTANCE_EPSILON_KM = 1e-9;
 
@@ -57,15 +58,6 @@ function eachDate(from: Date, to: Date): string[] {
 function dateKey(value: string | Date): string {
   if (typeof value === 'string') return value.slice(0, 10);
   return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
-}
-
-function distanceInKm(from: Coordinates, to: Coordinates): number {
-  const radians = (degrees: number) => degrees * Math.PI / 180;
-  const latitudeDelta = radians(to.latitude - from.latitude);
-  const longitudeDelta = radians(to.longitude - from.longitude);
-  const a = Math.sin(latitudeDelta / 2) ** 2
-    + Math.cos(radians(from.latitude)) * Math.cos(radians(to.latitude)) * Math.sin(longitudeDelta / 2) ** 2;
-  return 6371 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 function parseNumber(value: string | undefined, name: string, minimum: number, maximum: number): number | undefined {
