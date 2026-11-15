@@ -9,17 +9,21 @@ import {
   IsEmail,
   IsIn,
   IsInt,
-  IsNotEmpty,
-  IsNumber,
-  IsOptional,
   IsLatitude,
   IsLongitude,
+  IsNotEmpty,
+  IsNumber,
+  IsObject,
+  IsOptional,
   IsString,
   IsUrl,
   Max,
   MaxLength,
   Min,
+  Validate,
   ValidateNested,
+  ValidatorConstraint,
+  ValidatorConstraintInterface,
 } from 'class-validator';
 
 export class FarmLocationDto {
@@ -53,6 +57,38 @@ export class FarmLocationDto {
   @IsUrl({ require_protocol: true })
   @MaxLength(2048)
   mapLink!: string | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsLatitude()
+  latitude?: number | null;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsLongitude()
+  longitude?: number | null;
+}
+
+@ValidatorConstraint({ name: 'availabilityPeopleByDate', async: false })
+class AvailabilityPeopleByDateConstraint implements ValidatorConstraintInterface {
+  validate(value: unknown): boolean {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    const entries = Object.entries(value);
+    return entries.length <= 366 && entries.every(([date, peopleCount]) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return false;
+      const parsedDate = new Date(`${date}T00:00:00.000Z`);
+      return !Number.isNaN(parsedDate.getTime())
+        && parsedDate.toISOString().slice(0, 10) === date
+        && typeof peopleCount === 'number'
+        && Number.isInteger(peopleCount)
+        && peopleCount >= 1
+        && peopleCount <= 30;
+    });
+  }
+
+  defaultMessage(): string {
+    return 'Availability headcounts must be whole numbers from 1 to 30 keyed by valid dates.';
+  }
 }
 
 export class UpdateProfileDto {
@@ -154,6 +190,11 @@ export class UpdateProfileDto {
   @ArrayUnique()
   @IsDateString({}, { each: true })
   labourAvailableDates?: string[];
+
+  @IsOptional()
+  @IsObject()
+  @Validate(AvailabilityPeopleByDateConstraint)
+  labourAvailablePeopleByDate?: Record<string, number>;
 
   @IsOptional()
   @IsArray()

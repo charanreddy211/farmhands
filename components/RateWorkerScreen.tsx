@@ -192,6 +192,8 @@ export default function RateWorkerScreen({
           value={saveWorker}
           onValueChange={setSaveWorker}
           trackColor={{ false: colors.border, true: colors.primary }}
+          thumbColor={saveWorker ? colors.primary : colors.surfaceMuted}
+          ios_backgroundColor={colors.border}
           accessibilityLabel="Save worker to My workers"
         />
       </View>

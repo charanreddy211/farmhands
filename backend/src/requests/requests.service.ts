@@ -8,7 +8,7 @@ import { RequestDeclineReason, RequestResponseAction } from './dto/respond-to-re
 import { Booking, BookingCancellationReason, BookingStatus } from './booking.entity';
 import { BookingCancellationReasonDto } from './dto/cancel-booking.dto';
 import { User } from '../users/user.entity';
-import { LabourGroup } from '../groups/labour-group.entity';
+import { labourAvailabilityRangeCapacity } from '../groups/group-capacity';
 import { currentFarmDate, isSameDayAvailabilityOpen } from '../common/farm-time';
 
 export type RequestStatus = RequestEntity['status'];
@@ -16,6 +16,16 @@ export type WorkerRequestBucket = 'new' | 'accepted' | 'past';
 export const workerRequestBuckets: WorkerRequestBucket[] = ['new', 'accepted', 'past'];
 export type BookingBucket = 'upcoming' | 'pending' | 'past';
 export type BookingPartyRole = 'farmer' | 'labour';
+
+function requestDateKeys(startDate: string, endDate: string): string[] {
+  const dates: string[] = [];
+  const start = new Date(`${startDate}T00:00:00.000Z`);
+  const end = new Date(`${endDate}T00:00:00.000Z`);
+  for (const date = new Date(start); date <= end; date.setUTCDate(date.getUTCDate() + 1)) {
+    dates.push(date.toISOString().slice(0, 10));
+  }
+  return dates;
+}
 
 @Injectable()
 export class RequestsService {
@@ -28,8 +38,6 @@ export class RequestsService {
     private readonly bookings: Repository<Booking>,
     @InjectRepository(User)
     private readonly users: Repository<User>,
-    @InjectRepository(LabourGroup)
-    private readonly labourGroups: Repository<LabourGroup>,
     private readonly dataSource: DataSource,
   ) {}
 
@@ -74,6 +82,7 @@ export class RequestsService {
     if (input.startDate === currentFarmDate() && !isSameDayAvailabilityOpen()) {
       throw new BadRequestException('Same-day requests must be sent before 7:00 a.m. India time.');
     }
+    const dates = requestDateKeys(input.startDate, input.endDate);
     if (input.workerIds.length) {
       const selectedWorkers = await this.users.createQueryBuilder('user')
         .where('user.id IN (:...workerIds)', { workerIds: input.workerIds })
@@ -82,37 +91,36 @@ export class RequestsService {
       if (selectedWorkers.length !== input.workerIds.length) {
         throw new BadRequestException('One or more selected workers are not available profiles.');
       }
-      const selectedGroups = await this.labourGroups.find({ where: { leaderId: In(input.workerIds) } });
-      const groupByLeader = new Map(selectedGroups.map((group) => [group.leaderId, group]));
       const selectedPeople = selectedWorkers.reduce(
-        (total, worker) => total + (groupByLeader.get(worker.id)?.memberNames.length ?? 0) + 1,
+        (total, worker) => total + labourAvailabilityRangeCapacity(worker.labourAvailablePeopleByDate, dates),
         0,
       );
       if (selectedPeople < input.peopleNeeded) {
         throw new BadRequestException('Select enough worker groups to cover the number of people needed.');
-      }
-      const dates: string[] = [];
-      for (const date = new Date(start); date <= end; date.setUTCDate(date.getUTCDate() + 1)) {
-        dates.push(date.toISOString().slice(0, 10));
       }
       const unavailable = selectedWorkers.some((worker) => dates.some((date) =>
         !worker.labourAvailableDates.includes(date)));
       if (unavailable) {
         throw new BadRequestException('One or more selected workers are no longer available for those dates.');
       }
-      const conflictingBookings = await this.bookings.createQueryBuilder('booking')
-        .innerJoin('booking.request', 'request')
-        .select('booking.workerId', 'workerId')
-        .where('booking.workerId IN (:...workerIds)', { workerIds: input.workerIds })
-        .andWhere('booking.status = :status', { status: 'confirmed' })
-        .andWhere('request.startDate <= :endDate', { endDate: input.endDate })
-        .andWhere('request.endDate >= :startDate', { startDate: input.startDate })
-        .getRawMany<{ workerId: string }>();
-      if (conflictingBookings.length) {
-        throw new BadRequestException('One or more selected workers already have a confirmed booking for those dates.');
-      }
     }
     return this.dataSource.transaction(async (manager) => {
+      for (const workerId of [...input.workerIds].sort()) {
+        await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [workerId]);
+      }
+      if (input.workerIds.length) {
+        const conflictingBookings = await manager.getRepository(Booking).createQueryBuilder('booking')
+          .innerJoin('booking.request', 'request')
+          .select('booking.workerId', 'workerId')
+          .where('booking.workerId IN (:...workerIds)', { workerIds: input.workerIds })
+          .andWhere('booking.status = :status', { status: 'confirmed' })
+          .andWhere('request.startDate <= :endDate', { endDate: input.endDate })
+          .andWhere('request.endDate >= :startDate', { startDate: input.startDate })
+          .getRawMany<{ workerId: string }>();
+        if (conflictingBookings.length) {
+          throw new BadRequestException('One or more selected workers already have a confirmed booking for those dates.');
+        }
+      }
       const request = await manager.getRepository(RequestEntity).save(
         manager.getRepository(RequestEntity).create({
           ...input,
@@ -149,6 +157,16 @@ export class RequestsService {
     const requestIds = [...new Set(recipients.map(({ requestId }) => requestId))];
     const bookings = requestIds.length ? await this.bookings.find({ where: { workerId } }) : [];
     const bookingByRequestId = new Map(bookings.map((booking) => [booking.requestId, booking]));
+    const confirmedBookings = requestIds.length ? await this.bookings.find({
+      where: { requestId: In(requestIds), status: 'confirmed' },
+    }) : [];
+    const confirmedCountByRequestId = new Map<string, number>();
+    for (const booking of confirmedBookings) {
+      confirmedCountByRequestId.set(
+        booking.requestId,
+        (confirmedCountByRequestId.get(booking.requestId) ?? 0) + booking.peopleCount,
+      );
+    }
     const today = currentFarmDate();
     const visible = recipients.filter((recipient) => {
       const booking = bookingByRequestId.get(recipient.requestId);
@@ -183,6 +201,13 @@ export class RequestsService {
         },
         responseStatus: recipient.status,
         declineReason: recipient.declineReason,
+        maxAcceptingPeople: Math.min(
+          labourAvailabilityRangeCapacity(
+            worker.labourAvailablePeopleByDate,
+            requestDateKeys(recipient.request.startDate, recipient.request.endDate),
+          ),
+          Math.max(0, recipient.request.peopleNeeded - (confirmedCountByRequestId.get(recipient.requestId) ?? 0)),
+        ),
         respondedAt: recipient.respondedAt,
         bookingStatus: bookingByRequestId.get(recipient.requestId)?.status ?? null,
         expiresAt: recipient.request.expiresAt,
@@ -207,6 +232,9 @@ export class RequestsService {
 
     await this.expirePendingRequests();
     return this.dataSource.transaction(async (manager) => {
+      if (status === RequestResponseAction.ACCEPT) {
+        await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [workerId]);
+      }
       const request = await manager.getRepository(RequestEntity).findOne({
         where: { id: requestId },
         lock: { mode: 'pessimistic_write' },
@@ -232,7 +260,6 @@ export class RequestsService {
       await manager.getRepository(RequestRecipient).save(recipient);
 
       if (status === RequestResponseAction.ACCEPT) {
-        await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [workerId]);
         const conflictingBookingCount = await manager.getRepository(Booking).createQueryBuilder('booking')
           .innerJoin('booking.request', 'bookedRequest')
           .where('booking.workerId = :workerId', { workerId })
@@ -253,8 +280,12 @@ export class RequestsService {
         if (acceptedCount >= request.peopleNeeded) {
           throw new BadRequestException('This request already has enough confirmed workers.');
         }
-        const group = await manager.getRepository(LabourGroup).findOne({ where: { leaderId: workerId } });
-        const peopleCount = Math.min(group?.memberNames.length ? group.memberNames.length + 1 : 1, request.peopleNeeded - acceptedCount);
+        const worker = await manager.getRepository(User).findOne({ where: { id: workerId } });
+        const groupSize = labourAvailabilityRangeCapacity(
+          worker?.labourAvailablePeopleByDate,
+          requestDateKeys(request.startDate, request.endDate),
+        );
+        const peopleCount = Math.min(groupSize, request.peopleNeeded - acceptedCount);
         await bookingRepository.save(bookingRepository.create({
           requestId,
           workerId,
@@ -263,6 +294,20 @@ export class RequestsService {
           status: 'confirmed',
           confirmedAt: new Date(),
         }));
+        await manager.query(`
+          UPDATE "request_recipients" AS recipient
+          SET "status" = 'declined',
+              "declineReason" = 'already_booked',
+              "respondedAt" = $3
+          FROM "labour_requests" AS overlapping
+          WHERE recipient."requestId" = overlapping."id"
+            AND recipient."workerId" = $1
+            AND recipient."status" = 'pending'
+            AND overlapping."status" = 'open'
+            AND overlapping."id" <> $2
+            AND overlapping."startDate" <= $4::date
+            AND overlapping."endDate" >= $5::date
+        `, [workerId, requestId, new Date(), request.endDate, request.startDate]);
         if (acceptedCount + peopleCount >= request.peopleNeeded) {
           request.status = 'filled';
           await manager.getRepository(RequestEntity).save(request);
@@ -344,6 +389,7 @@ export class RequestsService {
           type: 'request' as const,
           request: this.requestSummary(recipient.request),
           responseStatus: recipient.status,
+          declineReason: recipient.declineReason,
           expiresAt: recipient.request.expiresAt,
           worker: this.userSummary(recipient.worker),
           farmer: this.userSummary(user),
@@ -400,6 +446,7 @@ export class RequestsService {
         type: recipient.status === 'expired' ? 'expired' as const : 'request' as const,
         request: this.requestSummary(recipient.request),
         responseStatus: recipient.status,
+        declineReason: recipient.declineReason,
         expiresAt: recipient.request.expiresAt,
         worker: role === 'farmer' ? this.userSummary(recipient.worker) : this.userSummary(user),
         farmer: role === 'farmer'

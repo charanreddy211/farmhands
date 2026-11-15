@@ -38,6 +38,7 @@ export type WorkerRequest = {
   request: Pick<LabourRequest, 'id' | 'title' | 'workType' | 'crop' | 'area' | 'startDate' | 'endDate' | 'peopleNeeded' | 'payPerDay' | 'status'>;
   responseStatus: 'pending' | 'accepted' | 'declined' | 'expired' | 'cancelled';
   declineReason: RequestDeclineReason | null;
+  maxAcceptingPeople: number;
   respondedAt: string | null;
   bookingStatus: 'confirmed' | 'cancelled' | 'completed' | null;
   expiresAt: string;
@@ -59,6 +60,7 @@ export type BookingListItem = {
     cancelledAt: string | null;
   };
   responseStatus: 'pending' | 'accepted' | 'declined' | 'expired' | 'cancelled';
+  declineReason?: RequestDeclineReason | null;
   expiresAt?: string;
   worker: { id: string; name: string; profileImageUrl: string | null; area: string } | null;
   farmer: { id: string; name: string; profileImageUrl: string | null; area: string } | null;

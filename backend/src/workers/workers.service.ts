@@ -12,7 +12,8 @@ import { WorkerReview } from './worker-review.entity';
 import { WorkerSearchAlert } from './worker-search-alert.entity';
 import { SavedWorker } from './saved-worker.entity';
 import { LabourGroup } from '../groups/labour-group.entity';
-import { currentFarmDate, isSameDayAvailabilityOpen } from '../common/farm-time';
+import { labourAvailabilityCapacity, labourAvailabilityRangeCapacity, labourGroupCapacity } from '../groups/group-capacity';
+import { currentFarmDate, filterCurrentAvailabilityDates, isSameDayAvailabilityOpen } from '../common/farm-time';
 
 type WorkerSearchInput = {
   from?: string;
@@ -28,6 +29,12 @@ type WorkerSearchInput = {
 };
 
 type Coordinates = { latitude: number; longitude: number };
+const DISTANCE_RANGES_KM = [3, 5, 7, 10, 15, 20] as const;
+const DISTANCE_EPSILON_KM = 1e-9;
+
+function isWithinDistance(distanceKm: number, radiusKm: number): boolean {
+  return distanceKm <= radiusKm + DISTANCE_EPSILON_KM;
+}
 
 function parseDate(value: string | undefined, field: string): Date | null {
   if (!value) return null;
@@ -288,7 +295,7 @@ export class WorkersService {
           dailyRate: worker.labourDailyRate,
           travelRadius: worker.labourTravelRadius,
           available: freeToday,
-          availableDates: worker.labourAvailableDates,
+          availableDates: filterCurrentAvailabilityDates(worker.labourAvailableDates),
           labourShift: worker.labourShift,
           rating: statsForWorker?.rating ?? null,
           reviewCount: statsForWorker?.reviewCount ?? 0,
@@ -345,7 +352,11 @@ export class WorkersService {
     if ((input.latitude === undefined) !== (input.longitude === undefined)) {
       throw new BadRequestException('Provide both latitude and longitude.');
     }
-    if (input.maxDistanceKm && input.latitude === undefined) {
+    if (input.maxDistanceKm !== undefined && input.maxDistanceKm !== null
+      && !DISTANCE_RANGES_KM.some((range) => range === input.maxDistanceKm)) {
+      throw new BadRequestException('Choose 3, 5, 7, 10, 15 or 20 km.');
+    }
+    if (input.maxDistanceKm !== undefined && input.maxDistanceKm !== null && input.latitude === undefined) {
       throw new BadRequestException('Enable location before saving a distance alert.');
     }
     if (!await this.users.exist({ where: { id: input.farmerId } })) {
@@ -497,6 +508,9 @@ export class WorkersService {
     }
     const center = latitude !== undefined && longitude !== undefined ? { latitude, longitude } : null;
     const maxDistanceKm = parseNumber(input.maxDistanceKm, 'maxDistanceKm', 1, 500);
+    if (maxDistanceKm !== undefined && !DISTANCE_RANGES_KM.some((range) => range === maxDistanceKm)) {
+      throw new BadRequestException('Choose 3, 5, 7, 10, 15 or 20 km.');
+    }
     if (maxDistanceKm !== undefined && !center) {
       throw new BadRequestException('Enable location to filter workers by distance.');
     }
@@ -596,11 +610,12 @@ export class WorkersService {
       const distanceKm = center && worker.labourLatitude !== null && worker.labourLongitude !== null
         ? distanceInKm(center, { latitude: worker.labourLatitude, longitude: worker.labourLongitude })
         : null;
-      if (maxDistanceKm !== undefined && (distanceKm === null || distanceKm > maxDistanceKm || (worker.labourTravelRadius !== null && distanceKm > worker.labourTravelRadius))) return [];
+      if (center && distanceKm !== null
+        && worker.labourTravelRadius !== null && !isWithinDistance(distanceKm, worker.labourTravelRadius)) return [];
 
       const bookedDates = bookedDatesByWorker.get(worker.id) ?? new Set<string>();
-      const availableDates = new Set(worker.labourAvailableDates.filter((date) =>
-        !bookedDates.has(date) && (date !== currentFarmDate() || isSameDayAvailabilityOpen())));
+      const availableDates = new Set(filterCurrentAvailabilityDates(worker.labourAvailableDates)
+        .filter((date) => !bookedDates.has(date)));
       const freeDates = requestedDates.length
         ? requestedDates.filter((date) => availableDates.has(date) && !bookedDates.has(date))
         : [...availableDates];
@@ -613,13 +628,17 @@ export class WorkersService {
         dailyRate: worker.labourDailyRate,
         travelRadius: worker.labourTravelRadius,
         distanceKm: distanceKm === null ? null : Math.round(distanceKm * 10) / 10,
+        distanceKmRaw: distanceKm,
         available: requestedDates.length
           ? availableForRange
           : isSameDayAvailabilityOpen() && worker.labourAvailable && !bookedDates.has(currentFarmDate()),
         availableDates: [...availableDates],
         labourShift: worker.labourShift,
         groupName: groupsByLeader.get(worker.id)?.name ?? null,
-        groupSize: (groupsByLeader.get(worker.id)?.memberNames.length ?? 0) + 1,
+        groupSize: requestedDates.length
+          ? labourAvailabilityRangeCapacity(worker.labourAvailablePeopleByDate, requestedDates)
+          : labourGroupCapacity(groupsByLeader.get(worker.id)),
+        groupSizeByDate: worker.labourAvailablePeopleByDate ?? {},
         rating: stats.averageRating === null ? null : Math.round(stats.averageRating * 10) / 10,
         reviewCount: stats.reviewCount,
         myReviewCount: workedWithCountMap.get(worker.id) ?? 0,
@@ -633,14 +652,31 @@ export class WorkersService {
     });
     const ordered = allMatching.sort((left, right) => {
       if (left.available !== right.available) return Number(right.available) - Number(left.available);
-      if (left.distanceKm !== null && right.distanceKm !== null && left.distanceKm !== right.distanceKm) return left.distanceKm - right.distanceKm;
+      if (left.distanceKmRaw !== null && right.distanceKmRaw !== null && left.distanceKmRaw !== right.distanceKmRaw) return left.distanceKmRaw - right.distanceKmRaw;
       if (left.rating !== null && right.rating !== null && left.rating !== right.rating) return right.rating - left.rating;
       if (left.rating === null && right.rating !== null) return 1;
       if (left.rating !== null && right.rating === null) return -1;
       return left.name.localeCompare(right.name);
     });
+    const rangeCounts = Object.fromEntries(DISTANCE_RANGES_KM.map((range) => [
+      range,
+      allMatching.filter((worker) => worker.available && worker.distanceKmRaw !== null && isWithinDistance(worker.distanceKmRaw, range)).length,
+    ]));
+    const matchingRange = maxDistanceKm === undefined
+      ? ordered
+      : ordered.filter((worker) => worker.distanceKmRaw !== null && isWithinDistance(worker.distanceKmRaw, maxDistanceKm));
 
-    const suggestions: Array<{ date: string; workerCount: number }> = [];
+    const availabilityByDate = new Map<string, { workerCount: number; peopleCount: number }>();
+    for (const worker of matchingRange) {
+      for (const date of worker.availableDates) {
+        const availability = availabilityByDate.get(date) ?? { workerCount: 0, peopleCount: 0 };
+        availability.workerCount += 1;
+        availability.peopleCount += labourAvailabilityCapacity(worker.groupSizeByDate, date);
+        availabilityByDate.set(date, availability);
+      }
+    }
+
+    const suggestions: Array<{ date: string; workerCount: number; peopleCount: number }> = [];
     if (requestedDates.length) {
       const firstSuggestion = new Date(to as Date);
       firstSuggestion.setUTCDate(firstSuggestion.getUTCDate() + 1);
@@ -648,8 +684,8 @@ export class WorkersService {
         const date = new Date(firstSuggestion);
         date.setUTCDate(date.getUTCDate() + offset);
         const key = date.toISOString().slice(0, 10);
-        const workerCount = allMatching.filter((worker) => worker.availableDates.includes(key)).length;
-        if (workerCount) suggestions.push({ date: key, workerCount });
+        const availability = availabilityByDate.get(key);
+        if (availability) suggestions.push({ date: key, ...availability });
       }
     }
 
@@ -662,9 +698,18 @@ export class WorkersService {
       : [];
     const bookedWorkerIdSet = new Set(bookedWorkerIds);
     return {
-      workers: ordered.filter((worker) => !bookedWorkerIdSet.has(worker.id)).slice(0, 100),
-      total: ordered.length,
-      availableCount: ordered.filter((worker) => worker.available).length,
+      workers: matchingRange.filter((worker) => !bookedWorkerIdSet.has(worker.id)).slice(0, 100)
+        .map(({ groupSizeByDate: _groupSizeByDate, distanceKmRaw: _distanceKmRaw, ...worker }) => worker),
+      total: matchingRange.length,
+      availableCount: matchingRange.filter((worker) => worker.available).length,
+      availablePeopleCount: matchingRange.filter((worker) => worker.available)
+        .reduce((total, worker) => total + worker.groupSize, 0),
+      rangeCounts,
+      unlocatedCount: center ? allMatching.filter((worker) => worker.distanceKmRaw === null).length : 0,
+      availabilityByDate: [...availabilityByDate.entries()].map(([date, availability]) => ({
+        date,
+        ...availability,
+      })),
       bookedWorkerIds,
       suggestions,
       skills,

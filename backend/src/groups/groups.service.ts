@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { User } from '../users/user.entity';
 import { SaveLabourGroupDto } from './dto/save-labour-group.dto';
 import { LabourGroup } from './labour-group.entity';
+import { labourGroupCapacity } from './group-capacity';
 
 @Injectable()
 export class GroupsService {
@@ -15,7 +16,11 @@ export class GroupsService {
   async findForLeader(leaderId: string) {
     await this.requireLabourLeader(leaderId);
     const group = await this.groups.findOne({ where: { leaderId } });
-    return group ? { ...group, size: group.memberNames.length + 1 } : null;
+    return group ? {
+      ...group,
+      availableMemberNames: group.availableMemberNames ?? group.memberNames,
+      size: labourGroupCapacity(group),
+    } : null;
   }
 
   async save(leaderId: string, input: SaveLabourGroupDto) {
@@ -28,12 +33,21 @@ export class GroupsService {
     if (new Set(memberNames.map((name) => name.toLocaleLowerCase())).size !== memberNames.length) {
       throw new BadRequestException('Each group member must have a unique name.');
     }
+    const activeNames = input.availableMemberNames ?? memberNames;
+    const memberNameSet = new Set(memberNames.map((memberName) => memberName.toLocaleLowerCase()));
+    if (activeNames.some((memberName) => !memberNameSet.has(memberName.trim().toLocaleLowerCase()))) {
+      throw new BadRequestException('Only names on your group roster can be marked ready to work.');
+    }
+    const availableMemberNames = memberNames.filter((memberName) =>
+      activeNames.some((activeName) => activeName.trim().toLocaleLowerCase() === memberName.toLocaleLowerCase()));
     const group = await this.groups.save(this.groups.create({
       leaderId,
       name: input.name.trim(),
       memberNames,
+      availableMemberNames,
+      workAsGroup: true,
     }));
-    return { ...group, size: memberNames.length + 1 };
+    return { ...group, size: labourGroupCapacity(group) };
   }
 
   private async requireLabourLeader(leaderId: string): Promise<User> {

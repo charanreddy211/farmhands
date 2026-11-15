@@ -257,7 +257,7 @@ export default function NewRequestScreen({ farmerId, profile, selectedWorkers, i
         <Text style={styles.successTitle}>Request saved</Text>
         <Text style={styles.successSubtitle}>Your request is now recorded. Worker response and alert delivery will be available in a later step.</Text>
         <View style={styles.summaryCard}>
-          {selectedWorkers.map((worker) => <SummaryRow key={worker.id} icon="person-outline" label={worker.name} value="Selected" />)}
+          {selectedWorkers.map((worker) => <SummaryRow key={worker.id} icon="people-outline" label={worker.name} value={`${worker.groupSize ?? 1} ${(worker.groupSize ?? 1) === 1 ? 'person' : 'people'}`} />)}
           <SummaryRow icon="calendar-outline" label="Dates" value={dateRangeLabel(createdRequest.startDate, createdRequest.endDate)} />
           <SummaryRow icon="reader-outline" label="Work" value={createdRequest.workType} />
           <SummaryRow icon="leaf-outline" label="Crop" value={createdRequest.crop} />
@@ -369,7 +369,7 @@ export default function NewRequestScreen({ farmerId, profile, selectedWorkers, i
 
       {step === 'review' && <>
         <View style={styles.summaryCard}>
-          {selectedWorkers.map((worker) => <SummaryRow key={worker.id} icon="person-outline" label={worker.name} value="Selected" />)}
+          {selectedWorkers.map((worker) => <SummaryRow key={worker.id} icon="people-outline" label={worker.name} value={`${worker.groupSize ?? 1} ${(worker.groupSize ?? 1) === 1 ? 'person' : 'people'}`} />)}
           <SummaryRow icon="calendar-outline" label="Dates" value={startDate && endDate ? dateRangeLabel(dateInputValue(startDate), dateInputValue(endDate)) : ''} />
           <SummaryRow icon="reader-outline" label="Work" value={workType} />
           <SummaryRow icon="leaf-outline" label="Crop" value={crop} />
@@ -386,7 +386,7 @@ export default function NewRequestScreen({ farmerId, profile, selectedWorkers, i
         </View>
         <View style={styles.noticeRow}>
           <Icon name="people-outline" color={colors.muted} />
-          <Text style={styles.noticeText}>{Math.min(selectedCapacity, peopleNeeded)} of {peopleNeeded} people covered so far. You can add workers later.</Text>
+          <Text style={styles.noticeText}>{Math.min(selectedCapacity, peopleNeeded)} of {peopleNeeded} people covered across {selectedWorkers.length} selected {selectedWorkers.length === 1 ? 'group' : 'groups'}. You can add more groups later.</Text>
         </View>
       </>}
 
@@ -396,7 +396,11 @@ export default function NewRequestScreen({ farmerId, profile, selectedWorkers, i
     {step !== 'sent' && <View style={styles.footer}>
       {step === 'work' && <PrimaryButton label="Continue to dates" onPress={continueToSchedule} disabled={optionsLoading && !workType.trim()} />}
       {step === 'schedule' && <PrimaryButton label="Review request" onPress={continueToReview} disabled={false} />}
-      {step === 'review' && <PrimaryButton label={submitting ? 'Saving request…' : `Save request${selectedWorkers.length ? ` for ${selectedWorkers.length}` : ''}`} onPress={() => { void submitRequest(); }} disabled={submitting} />}
+      {step === 'review' && <PrimaryButton
+        label={submitting ? 'Saving request…' : `Save request · ${selectedWorkers.length} ${selectedWorkers.length === 1 ? 'group' : 'groups'} · ${peopleNeeded} ${peopleNeeded === 1 ? 'person' : 'people'}`}
+        onPress={() => { void submitRequest(); }}
+        disabled={submitting}
+      />}
     </View>}
   </View>;
 }

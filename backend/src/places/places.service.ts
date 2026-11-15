@@ -8,6 +8,8 @@ type PlacePrediction = {
 type PlaceDetails = {
   address: string;
   mapLink: string;
+  latitude: number;
+  longitude: number;
 };
 
 type ReverseGeocodeResult = PlaceDetails;
@@ -38,13 +40,23 @@ export class PlacesService {
     if (!/^[A-Za-z0-9_-]{1,200}$/.test(placeId)) throw new BadGatewayException('Invalid place selection.');
     const response = await this.googleRequest(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`, {
       method: 'GET',
-      headers: { 'X-Goog-FieldMask': 'formattedAddress,googleMapsUri' },
+      headers: { 'X-Goog-FieldMask': 'formattedAddress,googleMapsUri,location' },
     });
-    const result = await response.json() as { formattedAddress?: string; googleMapsUri?: string };
-    if (!result.formattedAddress || !result.googleMapsUri) {
-      throw new BadGatewayException('Google Places did not return an address and map link.');
+    const result = await response.json() as {
+      formattedAddress?: string;
+      googleMapsUri?: string;
+      location?: { latitude?: number; longitude?: number };
+    };
+    if (!result.formattedAddress || !result.googleMapsUri
+      || result.location?.latitude === undefined || result.location.longitude === undefined) {
+      throw new BadGatewayException('Google Places did not return an address, map link, and coordinates.');
     }
-    return { address: result.formattedAddress, mapLink: result.googleMapsUri };
+    return {
+      address: result.formattedAddress,
+      mapLink: result.googleMapsUri,
+      latitude: result.location.latitude,
+      longitude: result.location.longitude,
+    };
   }
 
   async reverseGeocode(latitude: number, longitude: number): Promise<ReverseGeocodeResult> {
@@ -75,7 +87,7 @@ export class PlacesService {
 
     const query = match.place_id ? `place_id:${match.place_id}` : `${latitude},${longitude}`;
     const mapLink = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
-    return { address: match.formatted_address, mapLink };
+    return { address: match.formatted_address, mapLink, latitude, longitude };
   }
 
   private async googleRequest(url: string, init: RequestInit): Promise<Response> {

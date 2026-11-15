@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Switch, View } from 'react-native';
 import Text from './AppText';
 import AppTextInput from './AppTextInput';
 import { Ionicons } from '@expo/vector-icons';
 import { fetchLabourGroup, saveLabourGroup } from '../api/groups';
+import { colors } from '../theme';
 
 type Props = {
   leaderId: string;
@@ -14,6 +15,7 @@ type Props = {
 export default function MakeGroupScreen({ leaderId, leaderName, onBack }: Props) {
   const [name, setName] = useState('');
   const [members, setMembers] = useState<string[]>([]);
+  const [availableMembers, setAvailableMembers] = useState<boolean[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -27,6 +29,8 @@ export default function MakeGroupScreen({ leaderId, leaderName, onBack }: Props)
         if (group) {
           setName(group.name);
           setMembers(group.memberNames);
+          const availableNames = new Set((group.availableMemberNames ?? group.memberNames).map((member) => member.toLocaleLowerCase()));
+          setAvailableMembers(group.memberNames.map((member) => availableNames.has(member.toLocaleLowerCase())));
         }
       })
       .catch((loadError) => {
@@ -54,8 +58,14 @@ export default function MakeGroupScreen({ leaderId, leaderName, onBack }: Props)
     setError('');
     setSaved(false);
     try {
-      const group = await saveLabourGroup(leaderId, { name: name.trim(), memberNames: cleanNames });
+      const group = await saveLabourGroup(leaderId, {
+        name: name.trim(),
+        memberNames: cleanNames,
+        availableMemberNames: cleanNames.filter((_, index) => availableMembers[index]),
+      });
       setMembers(group.memberNames);
+      setAvailableMembers(group.memberNames.map((member) =>
+        group.availableMemberNames.some((available) => available.toLocaleLowerCase() === member.toLocaleLowerCase())));
       setSaved(true);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Could not save your group. Please try again.');
@@ -72,12 +82,12 @@ export default function MakeGroupScreen({ leaderId, leaderName, onBack }: Props)
         </Pressable>
         <View style={styles.headerCopy}><Text style={styles.kicker}>YOUR CREW</Text><Text style={styles.title}>My work group</Text></View>
       </View>
-      <Text style={styles.subtitle}>Add the people who work with you. Farmers can see your group size when they search nearby workers.</Text>
+      <Text style={styles.subtitle}>Add your crew and mark who is ready to work. Choose solo or your ready group separately for each available date.</Text>
 
       {loading ? <View style={styles.loading}><ActivityIndicator color="#2563EB" /><Text style={styles.hint}>Loading your saved group…</Text></View> : <>
         <View style={styles.summaryCard}>
           <View style={styles.summaryIcon}><Ionicons name="people" size={22} color="#2563EB" /></View>
-          <View style={styles.summaryCopy}><Text style={styles.summaryTitle}>{name.trim() || 'Your group'}</Text><Text style={styles.summaryMeta}>{members.length + 1} {members.length === 0 ? 'person' : 'people'} including you</Text></View>
+          <View style={styles.summaryCopy}><Text style={styles.summaryTitle}>{name.trim() || 'Your group'}</Text><Text style={styles.summaryMeta}>{availableMembers.filter(Boolean).length + 1} {availableMembers.filter(Boolean).length ? 'people' : 'person'} available including you</Text></View>
         </View>
         <Text style={styles.label}>GROUP NAME</Text>
         <AppTextInput style={styles.input} value={name} onChangeText={(value) => { setName(value); setSaved(false); }} placeholder="For example, Green Field Crew" maxLength={100} accessibilityLabel="Group name" />
@@ -88,7 +98,7 @@ export default function MakeGroupScreen({ leaderId, leaderName, onBack }: Props)
           <Ionicons name="checkmark-circle" size={19} color="#46764D" />
         </View>
         <View style={styles.membersHeader}>
-          <View><Text style={styles.label}>OTHER MEMBERS</Text><Text style={styles.hint}>Names are saved with your group roster.</Text></View>
+          <View><Text style={styles.label}>OTHER MEMBERS</Text><Text style={styles.hint}>Switch on members who are ready to join the group.</Text></View>
           <Text style={styles.count}>{members.length}/29</Text>
         </View>
         {members.map((member, index) => <View style={styles.memberRow} key={`member-${index}`}>
@@ -97,11 +107,30 @@ export default function MakeGroupScreen({ leaderId, leaderName, onBack }: Props)
             setMembers((current) => current.map((item, itemIndex) => itemIndex === index ? value : item));
             setSaved(false);
           }} placeholder={`Member ${index + 1} name`} maxLength={80} accessibilityLabel={`Member ${index + 1} name`} />
-          <Pressable onPress={() => { setMembers((current) => current.filter((_, itemIndex) => itemIndex !== index)); setSaved(false); }} accessibilityRole="button" accessibilityLabel={`Remove member ${index + 1}`}>
+          <Switch
+            value={availableMembers[index] ?? true}
+            onValueChange={(value) => {
+              setAvailableMembers((current) => current.map((enabled, itemIndex) => itemIndex === index ? value : enabled));
+              setSaved(false);
+            }}
+            trackColor={{ false: colors.border, true: '#93C5FD' }}
+            thumbColor={(availableMembers[index] ?? true) ? colors.primary : colors.surfaceMuted}
+            ios_backgroundColor={colors.border}
+            accessibilityLabel={`${member || `Member ${index + 1}`} ready to work`}
+          />
+          <Pressable onPress={() => {
+            setMembers((current) => current.filter((_, itemIndex) => itemIndex !== index));
+            setAvailableMembers((current) => current.filter((_, itemIndex) => itemIndex !== index));
+            setSaved(false);
+          }} accessibilityRole="button" accessibilityLabel={`Remove member ${index + 1}`}>
             <Ionicons name="close-circle-outline" size={21} color="#64748B" />
           </Pressable>
         </View>)}
-        <Pressable style={styles.addButton} onPress={() => { setMembers((current) => current.length < 29 ? [...current, ''] : current); setSaved(false); }} disabled={members.length >= 29} accessibilityRole="button">
+        <Pressable style={styles.addButton} onPress={() => {
+          setMembers((current) => current.length < 29 ? [...current, ''] : current);
+          setAvailableMembers((current) => current.length < 29 ? [...current, true] : current);
+          setSaved(false);
+        }} disabled={members.length >= 29} accessibilityRole="button">
           <Ionicons name="add-circle-outline" size={19} color="#2563EB" />
           <Text style={styles.addText}>{members.length >= 29 ? 'Group is at the 30-person limit' : 'Add a group member'}</Text>
         </Pressable>

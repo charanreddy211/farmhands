@@ -1,15 +1,19 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import Text from './AppText';
 import AppTextInput from './AppTextInput';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
+import { autocompletePlaces, fetchPlaceDetails, PlacePrediction } from '../api/places';
+import { FarmLocation, updateProfile } from '../api/profile';
 import { fetchWorkers, saveWorkerSearchAlert, WorkerProfile, WorkerSearchParams, WorkerSearchResponse } from '../api/workers';
 import { colors } from '../theme';
 
 type Props = {
   farmerId: string;
+  farms: FarmLocation[];
+  onFarmsChange: (farms: FarmLocation[]) => void;
   alertCount: number;
   alertCountError: string;
   initialSelectedWorkers: WorkerProfile[];
@@ -20,6 +24,16 @@ type Props = {
   onOpenSavedWorkers: () => void;
   initialSearchDates?: { from: string; to: string } | null;
 };
+
+const DISTANCE_RANGES = [3, 5, 7, 10, 15, 20] as const;
+const QUICK_DISTANCE_RANGES = [3, 5] as const;
+const DISTANCE_PREFERENCE_KEY = 'farmhands.worker-distance';
+
+type LocatedFarm = FarmLocation & { latitude: number; longitude: number };
+
+function hasFarmCoordinates(farm: FarmLocation): farm is LocatedFarm {
+  return typeof farm.latitude === 'number' && typeof farm.longitude === 'number';
+}
 
 function Icon({ name, size = 20, color = colors.text }: { name: keyof typeof Ionicons.glyphMap; size?: number; color?: string }) {
   return <Ionicons name={name} size={size} color={color} />;
@@ -88,6 +102,8 @@ function makeSearchParams(input: {
 
 export default function FindWorkersScreen({
   farmerId,
+  farms,
+  onFarmsChange,
   alertCount,
   alertCountError,
   initialSelectedWorkers,
@@ -99,6 +115,7 @@ export default function FindWorkersScreen({
   initialSearchDates,
 }: Props) {
   const today = dateKey(new Date());
+  const firstLocatedFarm = farms.find(hasFarmCoordinates);
   const [from, setFrom] = useState(initialSearchDates?.from ?? today);
   const [to, setTo] = useState(initialSearchDates?.to ?? today);
   const [calendarMonth, setCalendarMonth] = useState(() => {
@@ -108,12 +125,25 @@ export default function FindWorkersScreen({
   const [pickingDates, setPickingDates] = useState(false);
   const [selectingEndDate, setSelectingEndDate] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [distance, setDistance] = useState<number | null>(null);
+  const [moreDistancesOpen, setMoreDistancesOpen] = useState(false);
+  const [distance, setDistance] = useState<typeof DISTANCE_RANGES[number]>(5);
+  const [distanceReady, setDistanceReady] = useState(false);
+  const locationAutoCheckStarted = useRef(false);
   const [rating, setRating] = useState<number | null>(null);
   const [skill, setSkill] = useState<string | null>(null);
   const [workedWithMe, setWorkedWithMe] = useState(false);
   const [query, setQuery] = useState('');
-  const [location, setLocation] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [location, setLocation] = useState<{ latitude: number; longitude: number } | null>(() =>
+    firstLocatedFarm ? { latitude: firstLocatedFarm.latitude, longitude: firstLocatedFarm.longitude } : null);
+  const [originLabel, setOriginLabel] = useState(firstLocatedFarm?.name ?? '');
+  const [originFarmId, setOriginFarmId] = useState<string | null>(firstLocatedFarm?.id ?? null);
+  const [pinFarmId, setPinFarmId] = useState<string | null>(null);
+  const [originPickerOpen, setOriginPickerOpen] = useState(false);
+  const [originQuery, setOriginQuery] = useState('');
+  const [originPredictions, setOriginPredictions] = useState<PlacePrediction[]>([]);
+  const [originLoading, setOriginLoading] = useState(false);
+  const [originError, setOriginError] = useState('');
+  const [distanceStorageWarning, setDistanceStorageWarning] = useState('');
   const [locationLoading, setLocationLoading] = useState(false);
   const [result, setResult] = useState<WorkerSearchResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -125,11 +155,85 @@ export default function FindWorkersScreen({
     () => Object.fromEntries(initialSelectedWorkers.map((worker) => [worker.id, worker])),
   );
   const selectedWorkerIds = Object.keys(selectedWorkersById);
-  const [peopleNeeded, setPeopleNeeded] = useState(1);
+  const [peopleNeeded, setPeopleNeeded] = useState(() =>
+    Math.max(1, initialSelectedWorkers.reduce((total, worker) => total + (worker.groupSize ?? 1), 0)));
+  const [peopleNeededCustomized, setPeopleNeededCustomized] = useState(false);
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
   const [savingAlert, setSavingAlert] = useState(false);
   const [alertSaved, setAlertSaved] = useState(false);
   const [alertError, setAlertError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    AsyncStorage.getItem(`${DISTANCE_PREFERENCE_KEY}.${farmerId}`)
+      .then((saved) => {
+        if (saved === null) return;
+        const preferred = DISTANCE_RANGES.find((range) => range === Number(saved));
+        if (preferred === undefined) {
+          throw new Error('Saved distance range is invalid.');
+        }
+        if (active) setDistance(preferred);
+      })
+      .catch((storageError) => {
+        if (active) setDistanceStorageWarning(storageError instanceof Error
+          ? `Could not load your saved distance range: ${storageError.message}`
+          : 'Could not load your saved distance range.');
+      })
+      .finally(() => { if (active) setDistanceReady(true); });
+    return () => { active = false; };
+  }, [farmerId]);
+
+  useEffect(() => {
+    if (location || originFarmId) return;
+    const locatedFarm = farms.find(hasFarmCoordinates);
+    if (locatedFarm) {
+      setLocation({ latitude: locatedFarm.latitude, longitude: locatedFarm.longitude });
+      setOriginLabel(locatedFarm.name);
+      setOriginFarmId(locatedFarm.id);
+    }
+  }, [farms, location, originFarmId]);
+
+  useEffect(() => {
+    if (location || originFarmId || farms.some(hasFarmCoordinates) || locationAutoCheckStarted.current) return;
+    locationAutoCheckStarted.current = true;
+    let active = true;
+    Location.getForegroundPermissionsAsync()
+      .then(async (permission) => {
+        if (permission.status !== 'granted') return;
+        const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+        if (active) {
+          setLocation({ latitude: current.coords.latitude, longitude: current.coords.longitude });
+          setOriginLabel('Current phone location');
+        }
+      })
+      .catch(() => {
+        if (active) setOriginError('Could not read your current location. Choose a farm or search for a village.');
+      });
+    return () => { active = false; };
+  }, [farms, location, originFarmId]);
+
+  useEffect(() => {
+    if (!originPickerOpen || originQuery.trim().length < 2) {
+      setOriginPredictions([]);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      setOriginLoading(true);
+      autocompletePlaces(originQuery, controller.signal)
+        .then((predictions) => setOriginPredictions(predictions))
+        .catch((searchError) => {
+          if (!controller.signal.aborted) {
+            setOriginError(searchError instanceof Error ? searchError.message : 'Could not search for that village.');
+          }
+        })
+        .finally(() => { if (!controller.signal.aborted) setOriginLoading(false); });
+    }, 300);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [originPickerOpen, originQuery]);
 
   const searchParams = useMemo(() => makeSearchParams({
     from, to, location, distance, rating, skill, query, farmerId, workedWithMe,
@@ -137,6 +241,12 @@ export default function FindWorkersScreen({
 
   useEffect(() => {
     let active = true;
+    if (!distanceReady || !location) {
+      setLoading(false);
+      setResult(null);
+      setError('');
+      return () => { active = false; };
+    }
     setLoading(true);
     setError('');
     setOfflineResults(false);
@@ -179,16 +289,24 @@ export default function FindWorkersScreen({
         .finally(() => { if (active) setLoading(false); });
     }, 250);
     return () => { active = false; clearTimeout(timer); };
-  }, [searchParams, retryAttempt]);
+  }, [searchParams, retryAttempt, distanceReady, location]);
 
   useEffect(() => {
     if (!result) return;
     const visibleWorkers = new Map(result.workers.map((worker) => [worker.id, worker]));
     const bookedWorkerIds = new Set(result.bookedWorkerIds ?? []);
     setSelectedWorkersById((current) => Object.fromEntries(
-      Object.entries(current).filter(([id]) => !bookedWorkerIds.has(id) && (!visibleWorkers.has(id) || visibleWorkers.get(id)?.available)),
+      Object.entries(current)
+        .filter(([id]) => !bookedWorkerIds.has(id) && (!visibleWorkers.has(id) || visibleWorkers.get(id)?.available))
+        .map(([id, worker]) => [id, visibleWorkers.get(id) ?? worker]),
     ));
   }, [result]);
+  useEffect(() => {
+    if (peopleNeededCustomized) return;
+    const selectedCapacity = Object.values(selectedWorkersById)
+      .reduce((total, worker) => total + (worker.groupSize ?? 1), 0);
+    setPeopleNeeded(Math.max(1, selectedCapacity));
+  }, [selectedWorkersById, peopleNeededCustomized]);
 
   const calendarDays = useMemo(() => {
     const first = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1);
@@ -205,32 +323,132 @@ export default function FindWorkersScreen({
   const selectedCount = selectedWorkerIds.length;
   const selectedPeopleCount = Object.values(selectedWorkersById).reduce((total, worker) => total + (worker.groupSize ?? 1), 0);
   const selectedPeopleForRequest = Math.min(peopleNeeded, selectedPeopleCount);
+  const availabilityByDate = useMemo(() => {
+    if (result?.availabilityByDate) {
+      return new Map(result.availabilityByDate.map((availability) => [availability.date, availability]));
+    }
+    const derived = new Map<string, { date: string; workerCount: number; peopleCount: number }>();
+    for (const worker of result?.workers ?? []) {
+      for (const date of worker.availableDates) {
+        const availability = derived.get(date) ?? { date, workerCount: 0, peopleCount: 0 };
+        availability.workerCount += 1;
+        availability.peopleCount += worker.groupSize ?? 1;
+        derived.set(date, availability);
+      }
+    }
+    return derived;
+  }, [result]);
+  const availablePeopleCount = result?.availablePeopleCount
+    ?? result?.workers.filter((worker) => worker.available)
+      .reduce((total, worker) => total + (worker.groupSize ?? 1), 0)
+    ?? 0;
+  const countForRange = (range: typeof DISTANCE_RANGES[number]) => result?.rangeCounts?.[range] ?? 0;
+  const selectedRangeCount = countForRange(distance);
+  const widerRange = DISTANCE_RANGES.find((range) => range > distance && countForRange(range) > selectedRangeCount);
 
-  async function enableLocation(): Promise<boolean> {
-    if (location) return true;
+  function updatePeopleNeeded(update: (current: number) => number) {
+    setPeopleNeededCustomized(true);
+    setPeopleNeeded(update);
+  }
+
+  async function captureCurrentLocation(): Promise<boolean> {
     setLocationLoading(true);
-    setAlertError('');
+    setOriginError('');
     try {
       const permission = await Location.requestForegroundPermissionsAsync();
       if (permission.status !== 'granted') {
-        setError('Allow location access to filter workers by distance.');
+        setOriginError('Location access is off. Choose a saved farm or search for a village instead.');
         return false;
       }
       const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      setLocation({ latitude: position.coords.latitude, longitude: position.coords.longitude });
-      setError('');
+      const coordinates = { latitude: position.coords.latitude, longitude: position.coords.longitude };
+      if (pinFarmId) {
+        const updatedFarms = farms.map((farm) => farm.id === pinFarmId
+          ? { ...farm, ...coordinates }
+          : farm);
+        const savedProfile = await updateProfile(farmerId, { farms: updatedFarms });
+        onFarmsChange(savedProfile.farms);
+        setOriginFarmId(pinFarmId);
+        setOriginLabel(farms.find((farm) => farm.id === pinFarmId)?.name ?? 'Selected farm');
+      } else {
+        setOriginFarmId(null);
+        setOriginLabel('Current phone location');
+      }
+      setPinFarmId(null);
+      setLocation(coordinates);
+      setOriginPickerOpen(false);
+      setOriginError('');
       return true;
     } catch (locationError) {
-      setError(locationError instanceof Error ? locationError.message : 'Could not get your location.');
+      setOriginError(locationError instanceof Error ? locationError.message : 'Could not get your location.');
       return false;
     } finally {
       setLocationLoading(false);
     }
   }
 
-  async function selectDistance(value: number | null) {
-    if (value !== null && !(await enableLocation())) return;
+  async function selectDistance(value: typeof DISTANCE_RANGES[number]) {
     setDistance(value);
+    setAlertSaved(false);
+    try {
+      await AsyncStorage.setItem(`${DISTANCE_PREFERENCE_KEY}.${farmerId}`, String(value));
+      setDistanceStorageWarning('');
+    } catch (storageError) {
+      setDistanceStorageWarning(storageError instanceof Error
+        ? `Distance changed, but could not be saved on this phone: ${storageError.message}`
+        : 'Distance changed, but could not be saved on this phone.');
+    }
+    if (!location) {
+      setOriginPickerOpen(true);
+      setOriginError('');
+    }
+  }
+
+  function chooseFarm(farm: FarmLocation) {
+    setOriginFarmId(farm.id);
+    setOriginLabel(farm.name);
+    setOriginError('');
+    if (hasFarmCoordinates(farm)) {
+      setLocation({ latitude: farm.latitude, longitude: farm.longitude });
+      setPinFarmId(null);
+      setOriginPickerOpen(false);
+      return;
+    }
+    setPinFarmId(farm.id);
+    setLocation(null);
+    setOriginQuery(farm.address);
+    setOriginError('This farm needs a map pin. Search its village below, or stand at the farm and use your current location.');
+  }
+
+  async function chooseVillage(prediction: PlacePrediction) {
+    setOriginLoading(true);
+    setOriginError('');
+    try {
+      const place = await fetchPlaceDetails(prediction.placeId);
+      const coordinates = { latitude: place.latitude, longitude: place.longitude };
+      if (pinFarmId) {
+        const farm = farms.find((item) => item.id === pinFarmId);
+        if (!farm) throw new Error('The selected farm is no longer available.');
+        const updatedFarms = farms.map((item) => item.id === pinFarmId
+          ? { ...item, ...coordinates, mapLink: place.mapLink }
+          : item);
+        const savedProfile = await updateProfile(farmerId, { farms: updatedFarms });
+        onFarmsChange(savedProfile.farms);
+        setOriginLabel(farm.name);
+      } else {
+        setOriginFarmId(null);
+        setOriginLabel(place.address);
+      }
+      setLocation(coordinates);
+      setPinFarmId(null);
+      setOriginPickerOpen(false);
+      setOriginQuery('');
+      setOriginPredictions([]);
+    } catch (placeError) {
+      setOriginError(placeError instanceof Error ? placeError.message : 'Could not use that village as the search location.');
+    } finally {
+      setOriginLoading(false);
+    }
   }
 
   function chooseCalendarDate(date: Date) {
@@ -281,7 +499,7 @@ export default function FindWorkersScreen({
   }
 
   function resetFilters() {
-    setDistance(null);
+    void selectDistance(5);
     setRating(null);
     setSkill(null);
     setWorkedWithMe(false);
@@ -345,16 +563,20 @@ export default function FindWorkersScreen({
             const key = dateKey(date);
             const past = key < today;
             const selected = key >= from && key <= to;
+            const availability = availabilityByDate.get(key);
             return <Pressable
               key={key}
               style={[styles.calendarCell, selected && styles.calendarDaySelected, past && styles.calendarDayPast]}
               onPress={() => chooseCalendarDate(date)}
               disabled={past}
               accessibilityRole="button"
-              accessibilityLabel={date.toLocaleDateString('en-IN', { dateStyle: 'full' })}
+              accessibilityLabel={`${date.toLocaleDateString('en-IN', { dateStyle: 'full' })}${availability ? `, ${availability.peopleCount} people free` : ', no available workers'}`}
               accessibilityState={{ selected, disabled: past }}
             >
               <Text style={[styles.calendarDayText, selected && styles.calendarDayTextSelected, past && styles.calendarDayTextPast]}>{date.getDate()}</Text>
+              {!!availability && <Text style={[styles.calendarDayCapacity, selected && styles.calendarDayCapacitySelected]}>
+                {availability.peopleCount} {availability.peopleCount === 1 ? 'person' : 'people'}
+              </Text>}
             </Pressable>;
           })}
         </View>
@@ -364,12 +586,12 @@ export default function FindWorkersScreen({
         </View>
         <View style={styles.summaryCard}>
           <Text style={styles.summaryTitle}>{rangeLabel(from, to)} · {daysBetween(from, to)} {daysBetween(from, to) === 1 ? 'day' : 'days'}</Text>
-          <Text style={styles.summaryText}>{loading ? 'Checking availability…' : `${result?.availableCount ?? 0} workers free for all selected days`}</Text>
+          <Text style={styles.summaryText}>{loading ? 'Checking availability…' : `${result?.availableCount ?? 0} ${result?.availableCount === 1 ? 'worker group' : 'worker groups'} · ${availablePeopleCount} ${availablePeopleCount === 1 ? 'person' : 'people'} free for all selected days`}</Text>
         </View>
         {!!error && <Text style={styles.errorText} accessibilityRole="alert">{error}</Text>}
       </ScrollView>
       <View style={styles.stickyFooter}>
-        <PrimaryButton label={loading ? 'Checking workers…' : `Show ${result?.availableCount ?? 0} free workers`} onPress={() => setPickingDates(false)} disabled={loading} />
+        <PrimaryButton label={loading ? 'Checking availability…' : `Show ${result?.availableCount ?? 0} ${result?.availableCount === 1 ? 'group' : 'groups'} · ${availablePeopleCount} ${availablePeopleCount === 1 ? 'person' : 'people'}`} onPress={() => setPickingDates(false)} disabled={loading} />
       </View>
     </View>;
   }
@@ -387,7 +609,7 @@ export default function FindWorkersScreen({
           <View style={styles.profileAvatar}><Text style={styles.profileAvatarText}>{initials(selectedWorker.name)}</Text></View>
           <View style={styles.profileHeaderCopy}>
             <Text style={styles.profileName}>{selectedWorker.name}</Text>
-            <Text style={styles.profileMeta}><Icon name="location-outline" size={17} color={colors.muted} /> {selectedWorker.distanceKm === null ? selectedWorker.area || 'Location not set' : `${selectedWorker.distanceKm} km away · ${selectedWorker.area}`}</Text>
+            <Text style={styles.profileMeta}><Icon name="location-outline" size={17} color={colors.muted} /> {selectedWorker.distanceKm === null ? selectedWorker.area || 'Location not set' : `About ${selectedWorker.distanceKm.toFixed(1)} km away · ${selectedWorker.area}`}</Text>
           </View>
         </View>
         <View style={styles.statsRow}>
@@ -405,7 +627,7 @@ export default function FindWorkersScreen({
           <ProfileRow label="Preferred shift" value={selectedWorker.labourShift === 'morning' ? 'Morning' : 'Full day'} />
           {(selectedWorker.groupSize ?? 1) > 1 && <>
             <View style={styles.divider} />
-            <ProfileRow label={selectedWorker.groupName || 'Work group'} value={`${selectedWorker.groupSize} people`} />
+            <ProfileRow label={selectedWorker.groupName || 'Work group'} value={`${selectedWorker.groupSize} people free`} />
           </>}
           <View style={styles.divider} />
           <ProfileRow label="Your reviews" value={selectedWorker.myReviewCount ? `${selectedWorker.myReviewCount} submitted` : 'None yet'} />
@@ -452,7 +674,7 @@ export default function FindWorkersScreen({
     </View>;
   }
 
-  const noWorkers = !loading && !error && (result?.total ?? 0) === 0;
+  const noWorkers = !!location && !loading && !error && (result?.total ?? 0) === 0;
   const noOneFree = !loading && !error && (result?.total ?? 0) > 0 && !isRangeAvailable;
 
   return <View style={styles.page}>
@@ -466,7 +688,7 @@ export default function FindWorkersScreen({
           <Pressable style={styles.avatarButton} onPress={onOpenSavedWorkers} accessibilityRole="button" accessibilityLabel="Open My workers">
             <Icon name="bookmark-outline" size={21} color={colors.primary} />
           </Pressable>
-          <Pressable style={styles.avatarButton} onPress={() => { void enableLocation(); }} accessibilityRole="button" accessibilityLabel={location ? 'Location enabled' : 'Enable your location'}>
+          <Pressable style={styles.avatarButton} onPress={() => { setOriginPickerOpen(true); setOriginError(''); }} accessibilityRole="button" accessibilityLabel={location ? `Search location: ${originLabel}` : 'Choose a farm, village, or current location'}>
             {locationLoading ? <ActivityIndicator color={colors.text} /> : <Icon name={location ? 'location' : 'locate-outline'} size={22} />}
           </Pressable>
         </View>
@@ -498,16 +720,76 @@ export default function FindWorkersScreen({
         </Pressable>
       </View>
 
+      <View style={styles.distancePanel}>
+        <View style={styles.distancePanelHeading}>
+          <View>
+            <Text style={styles.distancePanelTitle}>MAX DISTANCE</Text>
+            <Pressable style={styles.originButton} onPress={() => { setOriginPickerOpen(true); setOriginError(''); }} accessibilityRole="button">
+              <Icon name="location-outline" size={16} color={colors.primary} />
+              <Text style={styles.originButtonText} numberOfLines={1}>{location ? `From ${originLabel || 'selected location'}` : 'Choose a farm or village'}</Text>
+              <Icon name="chevron-down" size={15} color={colors.muted} />
+            </Pressable>
+          </View>
+          <Text style={styles.distanceHint}>About · straight-line</Text>
+        </View>
+        <View style={styles.distanceChips}>
+          {QUICK_DISTANCE_RANGES.map((range) => (
+            <Pressable
+              key={range}
+              style={[styles.distanceChip, distance === range && styles.distanceChipSelected]}
+              onPress={() => { void selectDistance(range); }}
+              accessibilityRole="button"
+              accessibilityState={{ selected: distance === range }}
+              accessibilityLabel={`${range} kilometres, ${countForRange(range)} workers available`}
+            >
+              <Text style={[styles.distanceChipTitle, distance === range && styles.distanceChipTextSelected]}>{range} km</Text>
+              <Text style={[styles.distanceChipCount, distance === range && styles.distanceChipTextSelected]}>{countForRange(range)} free</Text>
+            </Pressable>
+          ))}
+          <Pressable
+            style={[styles.distanceChip, distance > 5 && styles.distanceChipSelected]}
+            onPress={() => setMoreDistancesOpen(true)}
+            accessibilityRole="button"
+            accessibilityState={{ selected: distance > 5, expanded: moreDistancesOpen }}
+            accessibilityLabel={distance > 5 ? `More distances, ${distance} kilometres selected` : 'More distance options'}
+          >
+            <Text style={[styles.distanceChipTitle, distance > 5 && styles.distanceChipTextSelected]}>More ▾</Text>
+            <Text style={[styles.distanceChipCount, distance > 5 && styles.distanceChipTextSelected]}>{distance > 5 ? `${distance} km selected` : '7–20 km'}</Text>
+          </Pressable>
+        </View>
+        <View style={styles.distanceSummary}>
+          <Icon name="radio-button-on" size={15} color={colors.primary} />
+          <Text style={styles.distanceSummaryText}>
+            {location
+              ? `${selectedRangeCount} ${selectedRangeCount === 1 ? 'worker group' : 'worker groups'} within ${distance} km free on ${rangeLabel(from, to)}`
+              : 'Set a search location to find nearby workers.'}
+          </Text>
+        </View>
+      </View>
+
       {!loading && !error && result && <Text style={styles.availabilitySummary}>
-        <Text style={styles.summaryEmphasis}>{result.availableCount} free</Text> on {rangeLabel(from, to)}
+        <Text style={styles.summaryEmphasis}>{result.availableCount} {result.availableCount === 1 ? 'group' : 'groups'} available</Text> on {rangeLabel(from, to)}
       </Text>}
       {offlineResults && !loading && <View style={styles.offlineBanner} accessibilityRole="alert">
         <Icon name="cloud-offline-outline" size={18} color={colors.text} />
         <Text style={styles.offlineText}>You’re offline. Showing saved results for these exact filters; availability may have changed.</Text>
       </View>}
       {!!cacheWarning && <Text style={styles.errorText} accessibilityRole="alert">{cacheWarning}</Text>}
+      {!!distanceStorageWarning && <Text style={styles.errorText} accessibilityRole="alert">{distanceStorageWarning}</Text>}
+      {!loading && !!location && !!result?.unlocatedCount && <Text style={styles.unlocatedNote}>
+        {result.unlocatedCount} workers don’t have a saved location, so they can’t be measured for this search.
+      </Text>}
 
       {loading && <Message icon="people-outline" title="Finding local workers…" />}
+      {!location && !loading && <View style={styles.locationRequiredCard}>
+        <View style={styles.emptyIcon}><Icon name="navigate-outline" size={30} color={colors.primary} /></View>
+        <Text style={styles.emptyTitle}>Choose where to search from</Text>
+        <Text style={styles.emptyText}>Pick a farm, enter a village, or enable phone location. Distances are approximate and workers’ exact coordinates aren’t shown.</Text>
+        <Pressable style={styles.notifyButton} onPress={() => { setOriginPickerOpen(true); setOriginError(''); }} accessibilityRole="button">
+          <Icon name="location-outline" color="#FFFFFF" size={20} />
+          <Text style={styles.notifyButtonText}>Choose search location</Text>
+        </Pressable>
+      </View>}
       {!!error && !loading && <View style={styles.messageCard}>
         <Text style={styles.errorText} accessibilityRole="alert">{error}</Text>
         <Pressable onPress={() => setRetryAttempt((attempt) => attempt + 1)} accessibilityRole="button"><Text style={styles.retryText}>Try again</Text></Pressable>
@@ -515,15 +797,27 @@ export default function FindWorkersScreen({
 
       {noWorkers && <View style={styles.emptyState}>
         <View style={styles.emptyIcon}><Icon name="people-outline" size={32} color={colors.primary} /></View>
-        <Text style={styles.emptyTitle}>No workers match these filters</Text>
-        <Text style={styles.emptyText}>Try a wider distance, another skill, or different search dates.</Text>
+        <Text style={styles.emptyTitle}>No one free within {distance} km</Text>
+        <Text style={styles.emptyText}>{widerRange
+          ? `${countForRange(widerRange) - selectedRangeCount} more within ${widerRange} km. Widen your search.`
+          : 'Try different dates or filters.'}</Text>
+        {widerRange && <Pressable style={styles.widenButton} onPress={() => { void selectDistance(widerRange); }} accessibilityRole="button">
+          <Text style={styles.widenButtonText}>Widen to {widerRange} km</Text>
+          <Icon name="arrow-forward" size={17} color={colors.primary} />
+        </Pressable>}
         <Pressable onPress={resetFilters} accessibilityRole="button"><Text style={styles.retryText}>Clear filters</Text></Pressable>
       </View>}
 
       {noOneFree && <View style={styles.noFreeState}>
         <View style={styles.emptyIcon}><Icon name="calendar-outline" size={32} color={colors.primary} /></View>
-        <Text style={styles.emptyTitle}>No one is free on {rangeLabel(from, to)}</Text>
-        <Text style={styles.emptyText}>Save this search for later, or try a nearby date with worker availability.</Text>
+        <Text style={styles.emptyTitle}>No one free within {distance} km on {rangeLabel(from, to)}</Text>
+        <Text style={styles.emptyText}>{widerRange
+          ? `${countForRange(widerRange) - selectedRangeCount} more available within ${widerRange} km. Widen your search or save this search for later.`
+          : 'Try nearby dates or save this search for later.'}</Text>
+        {widerRange && <Pressable style={styles.widenButton} onPress={() => { void selectDistance(widerRange); }} accessibilityRole="button">
+          <Text style={styles.widenButtonText}>Widen to {widerRange} km</Text>
+          <Icon name="arrow-forward" size={17} color={colors.primary} />
+        </Pressable>}
         <Pressable style={styles.notifyButton} onPress={() => { void saveAlert(); }} disabled={savingAlert || offlineResults} accessibilityRole="button">
           {savingAlert ? <ActivityIndicator color="#FFFFFF" /> : <Icon name={alertSaved ? 'checkmark-circle-outline' : 'notifications-outline'} color="#FFFFFF" size={21} />}
           <Text style={styles.notifyButtonText}>{savingAlert ? 'Saving alert…' : alertSaved ? 'Search saved' : 'Save search alert'}</Text>
@@ -534,7 +828,7 @@ export default function FindWorkersScreen({
         {!!result?.suggestions.length && <View style={styles.suggestionsCard}>
           <Text style={styles.sectionTitle}>Nearby dates</Text>
           {result.suggestions.map((suggestion) => <Pressable key={suggestion.date} style={styles.suggestionRow} onPress={() => openSuggestedDate(suggestion.date)} accessibilityRole="button">
-            <View><Text style={styles.suggestionTitle}>{dateLabel(suggestion.date, true)}</Text><Text style={styles.mutedText}>{suggestion.workerCount} {suggestion.workerCount === 1 ? 'worker' : 'workers'} free</Text></View>
+            <View><Text style={styles.suggestionTitle}>{dateLabel(suggestion.date, true)}</Text><Text style={styles.mutedText}>{suggestion.workerCount} {suggestion.workerCount === 1 ? 'group' : 'groups'} · {suggestion.peopleCount} {suggestion.peopleCount === 1 ? 'person' : 'people'} free</Text></View>
             <Icon name="chevron-forward" size={21} color={colors.text} />
           </Pressable>)}
         </View>}
@@ -550,11 +844,11 @@ export default function FindWorkersScreen({
                 <Pressable onPress={() => setSelectedWorkerId(worker.id)} accessibilityRole="button" accessibilityLabel={`View ${worker.name}'s profile`}>
                   <Text style={styles.workerName}>{worker.name}</Text>
                 </Pressable>
-                <View style={styles.availableBadge}><Text style={styles.availableBadgeText}>{(worker.groupSize ?? 1) > 1 ? `${worker.groupSize} PEOPLE` : 'SOLO'}</Text></View>
+                <View style={styles.availableBadge}><Text style={styles.availableBadgeText}>{`${worker.groupSize ?? 1} ${(worker.groupSize ?? 1) === 1 ? 'PERSON' : 'PEOPLE'} FREE`}</Text></View>
               </View>
               <Text style={styles.workerMeta}>
                 {worker.rating === null ? 'No ratings yet' : `★ ${worker.rating.toFixed(1)} · ${worker.reviewCount} reviews`}
-                {worker.distanceKm === null ? '' : ` · ${worker.distanceKm} km`}
+                {worker.distanceKm === null ? '' : ` · About ${worker.distanceKm.toFixed(1)} km away`}
               </Text>
               <Text style={styles.workerRate}>
                 {worker.dailyRate === null ? 'Daily rate not set' : `₹${worker.dailyRate}/day`}
@@ -579,7 +873,7 @@ export default function FindWorkersScreen({
 
     {selectedCount > 0 && <View style={styles.stickyFooter}>
       <PrimaryButton
-        label={`Send request · ${selectedPeopleForRequest} of ${peopleNeeded} people`}
+        label={`Send request · ${selectedPeopleForRequest} of ${peopleNeeded} ${peopleNeeded === 1 ? 'person' : 'people'}`}
         onPress={() => onPostRequest(Object.values(selectedWorkersById), { from, to, peopleNeeded })}
         disabled={selectedCount === 0 || selectedPeopleCount < peopleNeeded || offlineResults}
       />
@@ -622,15 +916,11 @@ export default function FindWorkersScreen({
             <View style={styles.filterSection}>
               <Text style={styles.filterSectionTitle}>People needed</Text>
               <View style={styles.peopleControls}>
-                <RoundButton label="Reduce number of people" icon="remove" onPress={() => setPeopleNeeded((value) => Math.max(1, value - 1))} />
+                <RoundButton label="Reduce number of people" icon="remove" onPress={() => updatePeopleNeeded((value) => Math.max(1, value - 1))} />
                 <Text style={styles.peopleCount}>{peopleNeeded}</Text>
-                <RoundButton label="Add number of people" icon="add" onPress={() => setPeopleNeeded((value) => Math.min(100, value + 1))} />
+                <RoundButton label="Add number of people" icon="add" onPress={() => updatePeopleNeeded((value) => Math.min(100, value + 1))} />
               </View>
             </View>
-            <FilterSection title="Distance">
-              <FilterPill label="Any" selected={distance === null} onPress={() => { void selectDistance(null); }} />
-              {[10, 25, 50].map((value) => <FilterPill key={value} label={`${value} km`} selected={distance === value} onPress={() => { void selectDistance(value); }} />)}
-            </FilterSection>
             <FilterSection title="Rating">
               <FilterPill label="Any" selected={rating === null} onPress={() => setRating(null)} />
               {[4, 4.5].map((value) => <FilterPill key={value} label={`${value.toFixed(1)}+`} selected={rating === value} onPress={() => setRating(value)} />)}
@@ -653,6 +943,96 @@ export default function FindWorkersScreen({
             </Pressable>
           </ScrollView>
           <PrimaryButton label={`Show ${result?.total ?? 0} workers`} onPress={() => setFiltersOpen(false)} disabled={loading} />
+        </View>
+      </View>
+    </Modal>
+    <Modal visible={moreDistancesOpen} transparent animationType="slide" onRequestClose={() => setMoreDistancesOpen(false)}>
+      <View style={styles.modalBackdrop}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={() => setMoreDistancesOpen(false)} accessibilityRole="button" accessibilityLabel="Close distance options" />
+        <View style={styles.filterSheet}>
+          <View style={styles.filterHeading}>
+            <Text style={styles.filterTitle}>More distance options</Text>
+            <Pressable onPress={() => setMoreDistancesOpen(false)} accessibilityRole="button" accessibilityLabel="Close">
+              <Icon name="close" size={23} color={colors.muted} />
+            </Pressable>
+          </View>
+          <Text style={styles.originHelp}>Choose the maximum straight-line distance from your search location.</Text>
+          <View style={styles.moreDistanceOptions}>
+            {DISTANCE_RANGES.filter((range) => range > 5).map((range) => (
+              <Pressable
+                key={range}
+                style={[styles.moreDistanceOption, distance === range && styles.distanceChipSelected]}
+                onPress={() => {
+                  setMoreDistancesOpen(false);
+                  void selectDistance(range);
+                }}
+                accessibilityRole="button"
+                accessibilityState={{ selected: distance === range }}
+              >
+                <Text style={[styles.distanceChipTitle, distance === range && styles.distanceChipTextSelected]}>{range} km</Text>
+                <Text style={[styles.distanceChipCount, distance === range && styles.distanceChipTextSelected]}>{countForRange(range)} free</Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+      </View>
+    </Modal>
+    <Modal visible={originPickerOpen} transparent animationType="slide" onRequestClose={() => setOriginPickerOpen(false)}>
+      <View style={styles.modalBackdrop}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={() => setOriginPickerOpen(false)} accessibilityRole="button" accessibilityLabel="Close location picker" />
+        <View style={styles.filterSheet}>
+          <View style={styles.filterHeading}>
+            <Text style={styles.filterTitle}>Search location</Text>
+            <Pressable onPress={() => setOriginPickerOpen(false)} accessibilityRole="button" accessibilityLabel="Close">
+              <Icon name="close" size={23} color={colors.muted} />
+            </Pressable>
+          </View>
+          <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+            {!!farms.length && <>
+              <Text style={styles.filterSectionTitle}>Your farms</Text>
+              {farms.map((farm) => (
+                <Pressable key={farm.id} style={styles.originFarmOption} onPress={() => chooseFarm(farm)} accessibilityRole="button">
+                  <View style={styles.originFarmCopy}>
+                    <Text style={styles.originFarmName}>{farm.name}</Text>
+                    <Text style={styles.originHelp}>{farm.address}</Text>
+                    <Text style={styles.originFarmStatus}>{hasFarmCoordinates(farm) ? 'Location saved' : 'Choose a village or set a map pin'}</Text>
+                  </View>
+                  <Icon name={hasFarmCoordinates(farm) ? 'checkmark-circle' : 'chevron-forward'} size={20} color={colors.primary} />
+                </Pressable>
+              ))}
+            </>}
+            <Pressable style={styles.currentLocationButton} onPress={() => { void captureCurrentLocation(); }} disabled={locationLoading} accessibilityRole="button">
+              {locationLoading ? <ActivityIndicator color={colors.primary} /> : <Icon name="locate-outline" size={20} color={colors.primary} />}
+              <View style={styles.originFarmCopy}>
+                <Text style={styles.originFarmName}>{pinFarmId ? 'Set this farm to my current location' : 'Use my current location'}</Text>
+                <Text style={styles.originHelp}>{pinFarmId ? 'Stand at the farm before saving its map pin.' : 'Used only as the starting point for this search.'}</Text>
+              </View>
+            </Pressable>
+            <Text style={styles.filterSectionTitle}>Or enter a village</Text>
+            <View style={styles.searchBox}>
+              <Icon name="search-outline" size={20} color={colors.muted} />
+              <AppTextInput
+                style={styles.searchInput}
+                value={originQuery}
+                onChangeText={(value) => {
+                  setOriginQuery(value);
+                  setOriginError('');
+                  if (!pinFarmId) setOriginFarmId(null);
+                }}
+                placeholder="Village, town, or farm"
+                placeholderTextColor={colors.muted}
+                accessibilityLabel="Search for a village or farm location"
+              />
+              {originLoading && <ActivityIndicator color={colors.primary} />}
+            </View>
+            {originPredictions.map((prediction) => (
+              <Pressable key={prediction.placeId} style={styles.originPrediction} onPress={() => { void chooseVillage(prediction); }} accessibilityRole="button">
+                <Icon name="location-outline" size={18} color={colors.primary} />
+                <Text style={styles.originPredictionText}>{prediction.text}</Text>
+              </Pressable>
+            ))}
+            {!!originError && <Text style={styles.errorText} accessibilityRole="alert">{originError}</Text>}
+          </ScrollView>
         </View>
       </View>
     </Modal>
@@ -735,6 +1115,20 @@ const styles = StyleSheet.create({
   subtitle: { color: colors.muted, fontSize: 15, marginTop: 3 },
   avatarButton: { width: 52, height: 52, alignItems: 'center', justifyContent: 'center', borderRadius: 26, backgroundColor: colors.surfaceMuted },
   topFilters: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 15 },
+  distancePanel: { padding: 16, marginBottom: 15, borderRadius: 22, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  distancePanelHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 12 },
+  distancePanelTitle: { color: colors.text, fontSize: 14, fontWeight: '800', letterSpacing: 0.4 },
+  originButton: { maxWidth: 260, minHeight: 34, flexDirection: 'row', alignItems: 'center', gap: 5 },
+  originButtonText: { flexShrink: 1, color: colors.muted, fontSize: 13, fontWeight: '600' },
+  distanceHint: { color: colors.muted, fontSize: 11 },
+  distanceChips: { flexDirection: 'row', gap: 8 },
+  distanceChip: { flex: 1, minHeight: 60, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6, borderRadius: 17, backgroundColor: colors.surfaceMuted, borderWidth: 1, borderColor: colors.border },
+  distanceChipSelected: { backgroundColor: colors.primary, borderColor: colors.primary },
+  distanceChipTitle: { color: colors.text, fontSize: 14, fontWeight: '800' },
+  distanceChipCount: { color: colors.muted, fontSize: 10, marginTop: 3 },
+  distanceChipTextSelected: { color: '#FFFFFF' },
+  distanceSummary: { minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 11, marginTop: 11, borderRadius: 18, backgroundColor: colors.surfaceMuted },
+  distanceSummaryText: { flex: 1, color: colors.text, fontSize: 12, fontWeight: '600' },
   iconFilterButton: { width: 46, height: 46, alignItems: 'center', justifyContent: 'center', borderRadius: 25, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
   pill: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingHorizontal: 14, borderRadius: 25, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
   pillActive: { backgroundColor: colors.primary, borderColor: colors.primary },
@@ -746,6 +1140,7 @@ const styles = StyleSheet.create({
   searchBox: { minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderColor: colors.border, borderRadius: 17, backgroundColor: colors.surface, paddingHorizontal: 15, marginBottom: 17 },
   searchInput: { flex: 1, minHeight: 49, color: colors.text, fontSize: 15 },
   availabilitySummary: { color: colors.muted, fontSize: 15, marginBottom: 12 },
+  unlocatedNote: { color: colors.muted, fontSize: 12, lineHeight: 18, marginBottom: 10 },
   offlineBanner: { backgroundColor: '#FFF1D6', borderColor: '#E6C98B', borderWidth: 1, borderRadius: 12, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
   offlineText: { color: '#4D4434', fontSize: 12, lineHeight: 17, flex: 1 },
   summaryEmphasis: { color: colors.text, fontWeight: '800' },
@@ -781,13 +1176,16 @@ const styles = StyleSheet.create({
   errorText: { color: colors.danger, fontSize: 14, lineHeight: 20, textAlign: 'center', marginVertical: 8 },
   savedAlertText: { color: colors.muted, fontSize: 13, lineHeight: 19, textAlign: 'center' },
   retryText: { color: colors.primary, fontSize: 15, fontWeight: '700', padding: 8 },
+  locationRequiredCard: { alignItems: 'center', padding: 22, gap: 9, borderRadius: 22, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
   emptyState: { alignItems: 'center', padding: 24, gap: 10 },
   noFreeState: { alignItems: 'center', paddingTop: 23, gap: 11 },
   emptyIcon: { width: 78, height: 78, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: colors.primary, borderRadius: 40, marginBottom: 9 },
   emptyTitle: { color: colors.text, fontSize: 23, lineHeight: 30, fontWeight: '800', textAlign: 'center' },
   emptyText: { color: colors.muted, fontSize: 15, lineHeight: 22, textAlign: 'center', marginBottom: 9 },
-  notifyButton: { minHeight: 56, width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, borderRadius: 30, backgroundColor: colors.text, marginVertical: 5 },
+  notifyButton: { minHeight: 56, width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, borderRadius: 30, backgroundColor: colors.primary, marginVertical: 5 },
   notifyButtonText: { color: '#FFFFFF', fontSize: 17, fontWeight: '800' },
+  widenButton: { minHeight: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 16, borderRadius: 23, backgroundColor: colors.surfaceMuted },
+  widenButtonText: { color: colors.primary, fontSize: 14, fontWeight: '800' },
   suggestionsCard: { width: '100%', padding: 16, marginTop: 6, borderWidth: 1, borderColor: colors.border, borderRadius: 20, backgroundColor: colors.surface },
   suggestionRow: { minHeight: 61, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: colors.border },
   suggestionTitle: { color: colors.text, fontSize: 16, fontWeight: '700' },
@@ -801,12 +1199,14 @@ const styles = StyleSheet.create({
   monthButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 22, backgroundColor: colors.surface },
   calendarGrid: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 20 },
   weekday: { width: `${100 / 7}%`, height: 40, color: colors.muted, fontSize: 14, fontWeight: '700', textAlign: 'center', textAlignVertical: 'center' },
-  calendarCell: { width: `${100 / 7}%`, minHeight: 48, alignItems: 'center', justifyContent: 'center', borderRadius: 25 },
+  calendarCell: { width: `${100 / 7}%`, minHeight: 58, alignItems: 'center', justifyContent: 'center', borderRadius: 25 },
   calendarDaySelected: { backgroundColor: colors.primary },
   calendarDayPast: { opacity: 0.42 },
   calendarDayText: { color: colors.text, fontSize: 16, fontWeight: '600' },
   calendarDayTextSelected: { color: '#FFFFFF' },
   calendarDayTextPast: { color: colors.muted },
+  calendarDayCapacity: { color: colors.success, fontSize: 8, lineHeight: 10, fontWeight: '700', textAlign: 'center' },
+  calendarDayCapacitySelected: { color: '#FFFFFF' },
   quickActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 16 },
   summaryCard: { padding: 18, borderWidth: 1, borderColor: colors.border, borderRadius: 20, backgroundColor: colors.surface },
   summaryTitle: { color: colors.text, fontSize: 19, fontWeight: '800' },
@@ -845,6 +1245,16 @@ const styles = StyleSheet.create({
   filterSheet: { maxHeight: '88%', paddingHorizontal: 20, paddingTop: 22, paddingBottom: 26, borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: colors.background },
   filterHeading: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 },
   filterTitle: { color: colors.text, fontSize: 24, fontWeight: '800' },
+  originHelp: { color: colors.muted, fontSize: 13, lineHeight: 19, marginBottom: 12 },
+  moreDistanceOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  moreDistanceOption: { width: '48%', minHeight: 70, alignItems: 'center', justifyContent: 'center', borderRadius: 18, backgroundColor: colors.surfaceMuted, borderWidth: 1, borderColor: colors.border },
+  originFarmOption: { minHeight: 72, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: 13, marginBottom: 8, borderRadius: 16, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
+  originFarmCopy: { flex: 1 },
+  originFarmName: { color: colors.text, fontSize: 15, fontWeight: '700' },
+  originFarmStatus: { color: colors.primary, fontSize: 11, fontWeight: '700', marginTop: 4 },
+  currentLocationButton: { minHeight: 66, flexDirection: 'row', alignItems: 'center', gap: 11, padding: 13, marginBottom: 17, borderRadius: 16, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
+  originPrediction: { minHeight: 50, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 10, borderBottomWidth: 1, borderBottomColor: colors.border },
+  originPredictionText: { flex: 1, color: colors.text, fontSize: 14 },
   resetText: { color: colors.muted, fontSize: 16, fontWeight: '600' },
   filterSection: { marginBottom: 19 },
   filterSectionTitle: { color: colors.muted, fontSize: 16, fontWeight: '700', marginBottom: 10 },

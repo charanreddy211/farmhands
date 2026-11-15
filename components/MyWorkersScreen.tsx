@@ -112,6 +112,8 @@ export default function MyWorkersScreen({ farmerId, onBack, onBookAgain }: Props
                 value={worker.notifyWhenAvailable}
                 onValueChange={() => { void toggleAvailabilityAlert(worker); }}
                 trackColor={{ false: colors.border, true: colors.primary }}
+                thumbColor={worker.notifyWhenAvailable ? colors.primary : colors.surfaceMuted}
+                ios_backgroundColor={colors.border}
                 accessibilityLabel={`Notify me when ${worker.name} is free`}
               />}
             </View>}

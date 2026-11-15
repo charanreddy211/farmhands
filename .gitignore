@@ -5,3 +5,5 @@ web-build/
 *.log
 .env
 .env.*
+/backend/uploads/
+/myproj.zip

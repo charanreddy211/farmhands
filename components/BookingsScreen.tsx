@@ -23,6 +23,7 @@ type Props = {
   alertCountError: string;
   initialBucket?: BookingBucket;
   onFindWorkers: () => void;
+  onBack: () => void;
   onOpenAlerts: () => void;
   onOpenProfile: () => void;
 };
@@ -65,7 +66,7 @@ function countdown(expiresAt: string): string {
   return hours ? `Reply due in ${hours}h` : `Reply due in ${minutes}m`;
 }
 
-export default function BookingsScreen({ farmerId, alertCount, alertCountError, initialBucket = 'upcoming', onFindWorkers, onOpenAlerts, onOpenProfile }: Props) {
+export default function BookingsScreen({ farmerId, alertCount, alertCountError, initialBucket = 'upcoming', onFindWorkers, onBack, onOpenAlerts, onOpenProfile }: Props) {
   const [bucket, setBucket] = useState<BookingBucket>(initialBucket);
   const [items, setItems] = useState<Record<BookingBucket, BookingListItem[]>>({
     upcoming: [],
@@ -204,6 +205,7 @@ export default function BookingsScreen({ farmerId, alertCount, alertCountError, 
   const selectedName = selectedItem?.worker?.name ?? 'worker';
   const selectedRequest = selectedItem?.request;
   const selectedType = selectedItem?.type;
+  const confirmedPeopleCount = selectedItem?.booking?.peopleCount ?? selectedRequest?.peopleNeeded ?? 0;
   const durationDays = selectedRequest
     ? Math.max(1, Math.round(
       (new Date(`${selectedRequest.endDate}T00:00:00`).getTime()
@@ -211,7 +213,7 @@ export default function BookingsScreen({ farmerId, alertCount, alertCountError, 
     ) + 1)
     : 0;
   const totalCost = selectedRequest
-    ? selectedRequest.peopleNeeded * durationDays * selectedRequest.payPerDay
+    ? confirmedPeopleCount * durationDays * selectedRequest.payPerDay
     : 0;
 
   if (ratingOpen && selectedItem?.booking && detail) {
@@ -239,7 +241,7 @@ export default function BookingsScreen({ farmerId, alertCount, alertCountError, 
     <View style={styles.header}>
       <Pressable
         style={styles.backButton}
-        onPress={selectedItem ? () => { setSelectedItem(null); setDetail(null); setError(''); } : onFindWorkers}
+        onPress={selectedItem ? () => { setSelectedItem(null); setDetail(null); setError(''); } : onBack}
         accessibilityRole="button"
         accessibilityLabel={selectedItem ? 'Back to bookings' : 'Find workers'}
       >
@@ -328,7 +330,7 @@ export default function BookingsScreen({ farmerId, alertCount, alertCountError, 
           : <View style={styles.avatar}><Text style={styles.avatarText}>{selectedName.charAt(0).toUpperCase() || '?'}</Text></View>}
         <View style={styles.personCopy}>
           <Text style={styles.personName}>{selectedName}</Text>
-          <Text style={styles.personMeta}>{selectedItem.type === 'booking' ? (selectedItem.booking?.status ?? 'confirmed').toUpperCase() : 'WAITING FOR REPLY'}</Text>
+          <Text style={styles.personMeta}>{selectedItem.type === 'booking' ? (selectedItem.booking?.status ?? 'confirmed').toUpperCase() : selectedItem.responseStatus.toUpperCase()}</Text>
         </View>
       </View>}
 
@@ -338,14 +340,22 @@ export default function BookingsScreen({ farmerId, alertCount, alertCountError, 
           <DetailRow icon="reader-outline" label="Work" value={selectedRequest?.workType ?? ''} />
           <DetailRow icon="leaf-outline" label="Crop" value={selectedRequest?.crop ?? ''} />
           <DetailRow icon="location-outline" label="Farm" value={selectedRequest?.area ?? ''} />
-          <DetailRow icon="people-outline" label="People" value={String(selectedRequest?.peopleNeeded ?? 0)} />
+          <DetailRow
+            icon="people-outline"
+            label={selectedItem.booking ? 'People confirmed' : 'People needed'}
+            value={selectedItem.booking
+              ? `${confirmedPeopleCount} of ${selectedRequest?.peopleNeeded ?? confirmedPeopleCount}`
+              : String(selectedRequest?.peopleNeeded ?? 0)}
+          />
           <DetailRow icon="cash-outline" label="Pay" value={`₹${selectedRequest?.payPerDay.toLocaleString('en-IN') ?? 0} / day`} last={!detail?.worker.phone} />
           {detail?.worker.phone && detail.booking.status !== 'cancelled' && <DetailRow icon="call-outline" label="Worker mobile" value={detail.worker.phone} last />}
         </View>}
 
-      {selectedType === 'request' && selectedItem.expiresAt && <Text style={styles.helperText}>{countdown(selectedItem.expiresAt)} · Phone numbers are shared after a worker accepts.</Text>}
+      {selectedType === 'request' && selectedItem.responseStatus === 'pending' && selectedItem.expiresAt && <Text style={styles.helperText}>{countdown(selectedItem.expiresAt)} · Phone numbers are shared after a worker accepts.</Text>}
+      {selectedType === 'request' && selectedItem.declineReason === 'already_booked'
+        && <Text style={styles.helperText}>Worker unavailable — they accepted another booking for overlapping dates.</Text>}
       {selectedType === 'booking' && detail && <View style={styles.costCard}>
-        <Text style={styles.costFormula}>{selectedRequest?.peopleNeeded} people × {durationDays} days × ₹{selectedRequest?.payPerDay}</Text>
+        <Text style={styles.costFormula}>{confirmedPeopleCount} people × {durationDays} days × ₹{selectedRequest?.payPerDay}</Text>
         <Text style={styles.costTotal}>₹{totalCost.toLocaleString('en-IN')}</Text>
         <Text style={styles.helperText}>Payment is arranged directly with workers.</Text>
       </View>}
@@ -436,11 +446,15 @@ function BookingCard({ item, bucket, onOpen, onCall, onCancel, responding }: {
       <View style={styles.cardCopy}>
         <View style={styles.nameAndBadge}><Text style={styles.personName}>{name}</Text><View style={[styles.statusBadge, bucket === 'pending' && styles.pendingBadge]}><Text style={[styles.statusText, bucket === 'pending' && styles.pendingText]}>{badge}</Text></View></View>
         <Text style={styles.cardMeta}>{item.request.workType} · {item.request.crop}</Text>
-        <Text style={styles.cardMeta}>{formatDateRange(item.request.startDate, item.request.endDate)} · {item.request.peopleNeeded} people</Text>
+        <Text style={styles.cardMeta}>{formatDateRange(item.request.startDate, item.request.endDate)} · {item.booking
+          ? `${item.booking.peopleCount ?? item.request.peopleNeeded} of ${item.request.peopleNeeded} people confirmed`
+          : `${item.request.peopleNeeded} people requested`}</Text>
       </View>
     </Pressable>
     <Text style={styles.payLine}>₹{item.request.payPerDay.toLocaleString('en-IN')} / day</Text>
     {bucket === 'pending' && item.expiresAt && <Text style={styles.deadlineText}><Icon name="time-outline" size={15} color={colors.muted} /> {countdown(item.expiresAt)}</Text>}
+    {bucket === 'past' && item.responseStatus === 'declined' && item.declineReason === 'already_booked'
+      && <Text style={styles.deadlineText}>Worker unavailable — they accepted another booking for overlapping dates.</Text>}
     {bucket === 'upcoming' && item.booking?.status === 'confirmed' && <View style={styles.actionRow}>
       <Pressable style={[styles.callButton, responding && styles.disabled]} onPress={onCall} disabled={responding} accessibilityRole="button">
         <Icon name="call-outline" size={18} color="#FFFFFF" /><Text style={styles.callButtonText}>Call</Text>
@@ -528,7 +542,7 @@ const styles = StyleSheet.create({
   payLine: { color: colors.text, fontSize: 16, fontWeight: '700' },
   deadlineText: { color: colors.muted, fontSize: 14, lineHeight: 20 },
   actionRow: { flexDirection: 'row', gap: 10 },
-  callButton: { minHeight: 52, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 28, backgroundColor: colors.text },
+  callButton: { minHeight: 52, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 28, backgroundColor: colors.primary },
   callButtonText: { color: '#FFFFFF', fontSize: 17, fontWeight: '700' },
   detailsButton: { minHeight: 48, alignItems: 'center', justifyContent: 'center', alignSelf: 'flex-start', paddingHorizontal: 18, borderWidth: 1, borderColor: colors.border, borderRadius: 25, backgroundColor: colors.surface },
   detailsButtonText: { color: colors.text, fontSize: 15, fontWeight: '600' },
@@ -545,7 +559,7 @@ const styles = StyleSheet.create({
   costTotal: { color: colors.text, fontSize: 29, fontWeight: '800', marginTop: 4 },
   helperText: { color: colors.muted, fontSize: 15, lineHeight: 22 },
   detailActions: { gap: 12, marginTop: 8 },
-  primaryButton: { minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, paddingHorizontal: 18, borderRadius: 30, backgroundColor: colors.text },
+  primaryButton: { minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, paddingHorizontal: 18, borderRadius: 30, backgroundColor: colors.primary },
   primaryButtonText: { color: '#FFFFFF', fontSize: 17, fontWeight: '700' },
   secondaryButton: { minHeight: 56, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 16, borderWidth: 1, borderColor: colors.border, borderRadius: 28, backgroundColor: colors.surface },
   secondaryButtonText: { color: colors.text, fontSize: 17, fontWeight: '600' },

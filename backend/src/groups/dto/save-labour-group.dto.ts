@@ -1,4 +1,4 @@
-import { ArrayMaxSize, ArrayUnique, IsArray, IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { ArrayMaxSize, ArrayUnique, IsArray, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class SaveLabourGroupDto {
   @IsString()
@@ -12,4 +12,12 @@ export class SaveLabourGroupDto {
   @IsString({ each: true })
   @MaxLength(80, { each: true })
   memberNames!: string[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(29)
+  @ArrayUnique()
+  @IsString({ each: true })
+  @MaxLength(80, { each: true })
+  availableMemberNames?: string[];
 }

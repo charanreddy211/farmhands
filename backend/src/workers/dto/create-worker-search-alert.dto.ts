@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsBoolean, IsDateString, IsInt, IsLatitude, IsLongitude, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
+import { IsBoolean, IsDateString, IsIn, IsInt, IsLatitude, IsLongitude, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
 
 export class CreateWorkerSearchAlertDto {
   @IsUUID()
@@ -24,8 +24,7 @@ export class CreateWorkerSearchAlertDto {
   @IsOptional()
   @Type(() => Number)
   @IsInt()
-  @Min(1)
-  @Max(500)
+  @IsIn([3, 5, 7, 10, 15, 20], { message: 'Choose 3, 5, 7, 10, 15 or 20 km.' })
   maxDistanceKm?: number | null;
 
   @IsOptional()

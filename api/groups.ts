@@ -4,6 +4,7 @@ export type LabourGroup = {
   leaderId: string;
   name: string;
   memberNames: string[];
+  availableMemberNames: string[];
   size: number;
   updatedAt: string;
 };
@@ -28,7 +29,7 @@ export async function fetchLabourGroup(leaderId: string): Promise<LabourGroup | 
   return readResponse<LabourGroup | null>(response);
 }
 
-export async function saveLabourGroup(leaderId: string, input: Pick<LabourGroup, 'name' | 'memberNames'>): Promise<LabourGroup> {
+export async function saveLabourGroup(leaderId: string, input: Pick<LabourGroup, 'name' | 'memberNames' | 'availableMemberNames'>): Promise<LabourGroup> {
   const response = await fetch(`${API_URL}/groups/${encodeURIComponent(leaderId)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },

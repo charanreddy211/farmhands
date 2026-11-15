@@ -8,6 +8,8 @@ export type PlacePrediction = {
 export type PlaceDetails = {
   address: string;
   mapLink: string;
+  latitude: number;
+  longitude: number;
 };
 
 async function readResponse<T>(response: Response): Promise<T> {

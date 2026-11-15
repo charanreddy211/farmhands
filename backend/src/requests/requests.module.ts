@@ -6,10 +6,9 @@ import { RequestRecipient } from './request-recipient.entity';
 import { Booking } from './booking.entity';
 import { RequestsService } from './requests.service';
 import { User } from '../users/user.entity';
-import { LabourGroup } from '../groups/labour-group.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([RequestEntity, RequestRecipient, Booking, User, LabourGroup])],
+  imports: [TypeOrmModule.forFeature([RequestEntity, RequestRecipient, Booking, User])],
   controllers: [RequestsController],
   providers: [RequestsService],
 })

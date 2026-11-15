@@ -9,6 +9,8 @@ export type FarmLocation = {
   crop: string;
   address: string;
   mapLink: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
 };
 
 export type UserProfile = {
@@ -32,12 +34,15 @@ export type UserProfile = {
   labourLocationSet: boolean;
   labourAvailable: boolean;
   labourAvailableDates: string[];
+  labourAvailablePeopleByDate?: Record<string, number>;
   labourShift: 'morning' | 'full_day';
   farms: FarmLocation[];
   createdAt: string;
 };
 
-export type ProfileDetails = Pick<UserProfile, 'firstName' | 'lastName' | 'email' | 'homeAddress' | 'homeAddressMapLink' | 'profileImageUrl' | 'roles' | 'preferredLanguage' | 'onboardingComplete' | 'labourSkills' | 'labourArea' | 'labourDailyRate' | 'labourTravelRadius' | 'labourLatitude' | 'labourLongitude' | 'labourAvailable' | 'labourAvailableDates' | 'labourShift' | 'farms'>;
+export type ProfileDetails = Pick<UserProfile, 'firstName' | 'lastName' | 'email' | 'homeAddress' | 'homeAddressMapLink' | 'profileImageUrl' | 'roles' | 'preferredLanguage' | 'onboardingComplete' | 'labourSkills' | 'labourArea' | 'labourDailyRate' | 'labourTravelRadius' | 'labourLatitude' | 'labourLongitude' | 'labourAvailable' | 'labourAvailableDates' | 'labourShift' | 'farms'> & {
+  labourAvailablePeopleByDate?: Record<string, number>;
+};
 export type UpdateProfileInput = Partial<ProfileDetails>;
 
 async function readResponse<T>(response: Response): Promise<T> {

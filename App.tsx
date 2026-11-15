@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, Image, Pressable, SafeAreaView, ScrollView, StyleSheet, TextInput as NativeTextInput, View, useWindowDimensions } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { Ionicons } from '@expo/vector-icons';
@@ -25,9 +25,9 @@ import MakeGroupScreen from './components/MakeGroupScreen';
 import BrandLogo from './components/BrandLogo';
 import Text from './components/AppText';
 import AppTextInput from './components/AppTextInput';
-import { fetchProfile, UserProfile } from './api/profile';
+import { fetchProfile, FarmLocation, UserProfile } from './api/profile';
 import { API_URL, createRequest, fetchRequests, LabourRequest } from './api/requests';
-import { fetchFarmerAlerts, type WorkerProfile } from './api/workers';
+import { fetchFarmerAlerts, type FarmerAlert, type WorkerProfile } from './api/workers';
 import { colors } from './theme';
 
 type Tab = 'home' | 'post';
@@ -35,6 +35,7 @@ type NetworkTab = 'requests' | 'find' | 'bookings' | 'alerts' | 'workers';
 type StoredSession = { userId: string; phone: string; expiresAt: number };
 
 const SESSION_STORAGE_KEY = 'farmhands.session';
+const FARMER_ALERTS_SEEN_KEY = 'farmhands.alerts.seenAt';
 const SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
 
 function Icon({ name, size = 20, color = '#2563EB' }: { name: keyof typeof Ionicons.glyphMap; size?: number; color?: string }) {
@@ -51,9 +52,12 @@ export default function App() {
   });
   const [tab, setTab] = useState<Tab>('home');
   const [networkTab, setNetworkTab] = useState<NetworkTab>('find');
+  const networkHistory = useRef<NetworkTab[]>([]);
   const [requests, setRequests] = useState<LabourRequest[]>([]);
   const [farmerAlertCount, setFarmerAlertCount] = useState(0);
   const [farmerAlertError, setFarmerAlertError] = useState('');
+  const [farmerAlertReadError, setFarmerAlertReadError] = useState('');
+  const [farmerAlertSeenAt, setFarmerAlertSeenAt] = useState<{ userId: string; timestamp: number } | null>(null);
   const [selectedWorkers, setSelectedWorkers] = useState<WorkerProfile[]>([]);
   const [initialWorkerDates, setInitialWorkerDates] = useState<{ from: string; to: string } | null>(null);
   const [initialBookingBucket, setInitialBookingBucket] = useState<'upcoming' | 'pending' | 'past'>('upcoming');
@@ -86,10 +90,55 @@ export default function App() {
   const isFullScreenFlow = isNewWorkerSearch || isNewRequest || isBookingsScreen
     || (tab === 'home' && (networkTab === 'alerts' || networkTab === 'workers') && !profileOpen);
 
+  function navigateNetworkTab(nextTab: NetworkTab, rememberCurrent = true) {
+    if (nextTab === networkTab) return;
+    if (rememberCurrent) networkHistory.current.push(networkTab);
+    setNetworkTab(nextTab);
+  }
+
+  function goBackNetworkTab(defaultTab: NetworkTab = 'find') {
+    setNetworkTab(networkHistory.current.pop() ?? defaultTab);
+  }
+
+  function resetNetworkTab(nextTab: NetworkTab) {
+    networkHistory.current = [];
+    setNetworkTab(nextTab);
+  }
+
+  useEffect(() => {
+    let active = true;
+    setFarmerAlertSeenAt(null);
+    setFarmerAlertReadError('');
+    if (!userId || !isFarmer) return () => { active = false; };
+
+    AsyncStorage.getItem(`${FARMER_ALERTS_SEEN_KEY}.${userId}`)
+      .then((savedTimestamp) => {
+        const timestamp = savedTimestamp === null ? 0 : Number(savedTimestamp);
+        if (!Number.isFinite(timestamp) || timestamp < 0) {
+          throw new Error('Saved alert read state is invalid.');
+        }
+        if (active) setFarmerAlertSeenAt({ userId, timestamp });
+      })
+      .catch((readError) => {
+        if (active) {
+          setFarmerAlertReadError(readError instanceof Error
+            ? `Could not load alert read state: ${readError.message}`
+            : 'Could not load alert read state.');
+          setFarmerAlertSeenAt({ userId, timestamp: 0 });
+        }
+      });
+
+    return () => { active = false; };
+  }, [userId, isFarmer]);
+
   useEffect(() => {
     if (!userId || !isFarmer) {
       setFarmerAlertCount(0);
       setFarmerAlertError('');
+      return;
+    }
+    if (!farmerAlertSeenAt || farmerAlertSeenAt.userId !== userId) {
+      setFarmerAlertCount(0);
       return;
     }
     let active = true;
@@ -100,7 +149,8 @@ export default function App() {
       try {
         const alerts = await fetchFarmerAlerts(userId);
         if (active) {
-          setFarmerAlertCount(alerts.length);
+          const unreadCount = alerts.filter((alert) => Date.parse(alert.createdAt) > farmerAlertSeenAt.timestamp).length;
+          setFarmerAlertCount(networkTab === 'alerts' ? 0 : unreadCount);
           setFarmerAlertError('');
         }
       } catch (alertError) {
@@ -121,7 +171,22 @@ export default function App() {
       clearInterval(interval);
       subscription.remove();
     };
-  }, [userId, isFarmer, networkTab]);
+  }, [userId, isFarmer, networkTab, farmerAlertSeenAt]);
+
+  const markFarmerAlertsSeen = useCallback(async (alerts: FarmerAlert[]) => {
+    if (!userId || !alerts.length) return;
+    const timestamps = alerts.map((alert) => Date.parse(alert.createdAt));
+    if (timestamps.some((timestamp) => !Number.isFinite(timestamp))) {
+      throw new Error('An alert has an invalid creation date.');
+    }
+    const latestTimestamp = Math.max(...timestamps);
+    const previousTimestamp = farmerAlertSeenAt?.userId === userId ? farmerAlertSeenAt.timestamp : 0;
+    const timestamp = Math.max(previousTimestamp, latestTimestamp);
+    await AsyncStorage.setItem(`${FARMER_ALERTS_SEEN_KEY}.${userId}`, String(timestamp));
+    if (timestamp > previousTimestamp) setFarmerAlertSeenAt({ userId, timestamp });
+    setFarmerAlertCount(0);
+    setFarmerAlertReadError('');
+  }, [farmerAlertSeenAt, userId]);
 
   useEffect(() => {
     let active = true;
@@ -245,7 +310,7 @@ export default function App() {
     setOtpRequested(false);
     setProfile(null);
     setProfileOpen(false);
-    setNetworkTab('find');
+    resetNetworkTab('find');
     setInitialWorkerDates(null);
     setLabourRequestsOpen(false);
     setLabourGroupOpen(false);
@@ -316,13 +381,13 @@ export default function App() {
         onOpenGroup={() => setLabourGroupOpen(true)}
         onSignOut={signOut}
       /> : <View style={[styles.shell, isWide && styles.shellWide]}>
-        {!isFullScreenFlow && <View style={styles.header}>
+        {!isFullScreenFlow && !profileOpen && <View style={styles.header}>
           <Pressable
             style={styles.brandRow}
             onPress={() => {
               setProfileOpen(false);
               setTab('home');
-              setNetworkTab('find');
+              resetNetworkTab('find');
             }}
             accessibilityRole="button"
             accessibilityLabel="Go to local network"
@@ -342,61 +407,75 @@ export default function App() {
           onBack={() => setProfileOpen(false)}
           onProfileChange={setProfile}
           onSignOut={signOut}
+          onOpenBookings={() => {
+            setInitialBookingBucket('upcoming');
+            setProfileOpen(false);
+            navigateNetworkTab('bookings');
+          }}
+          onOpenSavedWorkers={() => {
+            setProfileOpen(false);
+            navigateNetworkTab('workers');
+          }}
         /> : <>
           {tab === 'home' && !isFullScreenFlow && <View style={networkTabStyles.networkTabs} accessibilityRole="tablist">
-            <Pressable style={[networkTabStyles.networkTab, networkTab === 'find' && networkTabStyles.networkTabActive]} onPress={() => setNetworkTab('find')} accessibilityRole="tab" accessibilityState={{ selected: networkTab === 'find' }}>
+            <Pressable style={[networkTabStyles.networkTab, networkTab === 'find' && networkTabStyles.networkTabActive]} onPress={() => resetNetworkTab('find')} accessibilityRole="tab" accessibilityState={{ selected: networkTab === 'find' }}>
               <Text style={[networkTabStyles.networkTabLabel, networkTab === 'find' && networkTabStyles.networkTabLabelActive]}>Find workers</Text>
             </Pressable>
-            <Pressable style={[networkTabStyles.networkTab, networkTab === 'requests' && networkTabStyles.networkTabActive]} onPress={() => setNetworkTab('requests')} accessibilityRole="tab" accessibilityState={{ selected: networkTab === 'requests' }}>
+            <Pressable style={[networkTabStyles.networkTab, networkTab === 'requests' && networkTabStyles.networkTabActive]} onPress={() => resetNetworkTab('requests')} accessibilityRole="tab" accessibilityState={{ selected: networkTab === 'requests' }}>
               <Text style={[networkTabStyles.networkTabLabel, networkTab === 'requests' && networkTabStyles.networkTabLabelActive]}>Farmer requests</Text>
             </Pressable>
           </View>}
           {tab === 'home' && networkTab === 'find' && <FindWorkersScreen
             farmerId={userId ?? ''}
+            farms={profile?.farms ?? []}
+            onFarmsChange={(farms: FarmLocation[]) => setProfile((current) => current ? { ...current, farms } : current)}
             alertCount={farmerAlertCount}
-            alertCountError={farmerAlertError}
+            alertCountError={farmerAlertError || farmerAlertReadError}
             initialSelectedWorkers={selectedWorkers}
             onPostRequest={(workers, details) => { setSelectedWorkers(workers); setRequestContext(details); setTab('post'); }}
             onOpenProfile={() => setProfileOpen(true)}
             onOpenBookings={() => {
               setInitialBookingBucket('upcoming');
-              setNetworkTab('bookings');
+              navigateNetworkTab('bookings');
             }}
-            onOpenAlerts={() => setNetworkTab('alerts')}
-            onOpenSavedWorkers={() => setNetworkTab('workers')}
+            onOpenAlerts={() => navigateNetworkTab('alerts')}
+            onOpenSavedWorkers={() => navigateNetworkTab('workers')}
             initialSearchDates={initialWorkerDates}
           />}
           {tab === 'home' && networkTab === 'bookings' && userId && <BookingsScreen
             farmerId={userId}
             alertCount={farmerAlertCount}
-            alertCountError={farmerAlertError}
+            alertCountError={farmerAlertError || farmerAlertReadError}
             initialBucket={initialBookingBucket}
-            onFindWorkers={() => setNetworkTab('find')}
-            onOpenAlerts={() => setNetworkTab('alerts')}
+            onFindWorkers={() => resetNetworkTab('find')}
+            onBack={() => goBackNetworkTab()}
+            onOpenAlerts={() => navigateNetworkTab('alerts')}
             onOpenProfile={() => setProfileOpen(true)}
           />}
-          {tab === 'home' && networkTab === 'alerts' && userId && <AlertsScreen
+          {tab === 'home' && networkTab === 'alerts' && userId && farmerAlertSeenAt?.userId === userId && <AlertsScreen
             farmerId={userId}
+            onAlertsViewed={markFarmerAlertsSeen}
+            onBack={() => goBackNetworkTab()}
             onFindWorkers={(alert) => {
               if (alert?.from && alert.to) setInitialWorkerDates({ from: alert.from, to: alert.to });
-              setNetworkTab('find');
+              resetNetworkTab('find');
             }}
             onOpenBookings={(bucket = 'upcoming') => {
               setInitialBookingBucket(bucket);
-              setNetworkTab('bookings');
+              navigateNetworkTab('bookings');
             }}
             onOpenProfile={() => setProfileOpen(true)}
           />}
           {tab === 'home' && networkTab === 'workers' && userId && <MyWorkersScreen
             farmerId={userId}
-            onBack={() => setNetworkTab('find')}
+            onBack={() => goBackNetworkTab()}
             onBookAgain={(worker) => {
               const today = new Date();
               const day = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
               setInitialWorkerDates({ from: day, to: day });
               setSelectedWorkers([worker]);
               setRequestContext({ from: day, to: day, peopleNeeded: 1 });
-              setNetworkTab('find');
+              resetNetworkTab('find');
             }}
           />}
           {tab === 'home' && networkTab === 'requests' && <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -412,8 +491,8 @@ export default function App() {
             initialDates={requestContext}
             initialPeopleNeeded={requestContext?.peopleNeeded ?? 1}
             onPublish={publishRequest}
-            onViewRequests={() => { setSelectedWorkers([]); setRequestContext(null); setNetworkTab('requests'); setTab('home'); }}
-            onBackToSearch={() => { setNetworkTab('find'); setTab('home'); }}
+            onViewRequests={() => { setSelectedWorkers([]); setRequestContext(null); resetNetworkTab('requests'); setTab('home'); }}
+            onBackToSearch={() => { resetNetworkTab('find'); setTab('home'); }}
           />}
         </>}
 

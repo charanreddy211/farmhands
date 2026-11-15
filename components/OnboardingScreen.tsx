@@ -15,7 +15,7 @@ type Props = {
 
 export default function OnboardingScreen({ userId, profile, onProfileChange }: Props) {
   const [role, setRole] = useState<'farmer' | 'labour' | null>(() => profile.roles[0] ?? null);
-  const [language, setLanguage] = useState<'en' | 'te'>(profile.preferredLanguage ?? 'en');
+  const language = 'en';
   const [step, setStep] = useState<'role' | 'language' | 'farmer'>(() =>
     profile.roles.includes('farmer') && !profile.onboardingComplete ? 'farmer' : 'role');
   const [firstName, setFirstName] = useState(profile.firstName);
@@ -107,27 +107,32 @@ export default function OnboardingScreen({ userId, profile, onProfileChange }: P
 
     {step === 'role' ? <>
       <Pressable style={[styles.roleCard, role === 'farmer' && styles.selectedCard]} onPress={() => setRole('farmer')} accessibilityRole="radio" accessibilityState={{ selected: role === 'farmer' }}>
-        <View style={styles.roleIcon}><Ionicons name="car-outline" size={24} color="#0F172A" /></View>
+        <View style={styles.roleIcon}><Ionicons name="people-outline" size={24} color="#0F172A" /></View>
         <View style={styles.roleCopy}><Text style={styles.roleTitle}>I need workers</Text><Text style={styles.roleDescription}>నా వ్యవసాయ పనికి కూలీలు కావాలి</Text></View>
         <View style={[styles.roleCheck, role === 'farmer' && styles.roleCheckSelected]}>{role === 'farmer' && <Ionicons name="checkmark" size={20} color="#FFFFFF" />}</View>
       </Pressable>
       <Pressable style={[styles.roleCard, role === 'labour' && styles.selectedCard]} onPress={() => setRole('labour')} accessibilityRole="radio" accessibilityState={{ selected: role === 'labour' }}>
-        <View style={styles.roleIcon}><Ionicons name="person-outline" size={24} color="#0F172A" /></View>
+        <View style={styles.roleIcon}><Ionicons name="hand-left-outline" size={24} color="#0F172A" /></View>
         <View style={styles.roleCopy}><Text style={styles.roleTitle}>I want work</Text><Text style={styles.roleDescription}>నాకు వ్యవసాయ పని కావాలి</Text></View>
         <View style={[styles.roleCheck, role === 'labour' && styles.roleCheckSelected]}>{role === 'labour' && <Ionicons name="checkmark" size={20} color="#FFFFFF" />}</View>
       </Pressable>
     </> : step === 'language' ? <>
       <Text style={styles.fieldLabel}>APP LANGUAGE</Text>
       <View style={styles.languageRow}>
-        {(['te', 'en'] as const).map((value) => <Pressable key={value} onPress={() => setLanguage(value)} style={[styles.languageChoice, language === value && styles.languageSelected]} accessibilityRole="radio" accessibilityState={{ selected: language === value }}>
+        <View style={[styles.languageChoice, styles.languageSelected]} accessibilityRole="radio" accessibilityState={{ selected: true }}>
           <View style={styles.languageCopy}>
-            <Text style={styles.languageText}>{value === 'en' ? 'English' : 'తెలుగు'}</Text>
-            <Text style={styles.languageTranslation}>{value === 'en' ? 'ఇంగ్లీష్' : 'Telugu'}</Text>
+            <Text style={styles.languageText}>English</Text>
+            <Text style={styles.languageTranslation}>App language</Text>
           </View>
-          <View style={[styles.languageRadio, language === value && styles.languageRadioSelected]}>
-            {language === value && <View style={styles.languageRadioDot} />}
+          <View style={[styles.languageRadio, styles.languageRadioSelected]}><View style={styles.languageRadioDot} /></View>
+        </View>
+        <View style={[styles.languageChoice, styles.languageDisabled]} accessibilityRole="radio" accessibilityState={{ disabled: true }}>
+          <View style={styles.languageCopy}>
+            <Text style={styles.languageText}>తెలుగు</Text>
+            <Text style={styles.languageTranslation}>Coming soon</Text>
           </View>
-        </Pressable>)}
+          <View style={styles.languageRadio} />
+        </View>
       </View>
     </> : <>
       <Text style={styles.fieldLabel}>YOUR NAME</Text>
@@ -172,6 +177,7 @@ const styles = StyleSheet.create({
   languageChoice: { minHeight: 82, paddingHorizontal: 20, borderRadius: 24, borderWidth: 1, borderColor: '#E2E8F0', backgroundColor: '#FFFFFF', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   languageCopy: { alignItems: 'flex-start', gap: 3 },
   languageSelected: { borderColor: '#2563EB', borderWidth: 2 },
+  languageDisabled: { opacity: 0.55 },
   languageRadio: { width: 28, height: 28, borderWidth: 2, borderColor: '#CBD5E1', borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   languageRadioSelected: { borderColor: '#2563EB' },
   languageRadioDot: { width: 14, height: 14, borderRadius: 7, backgroundColor: '#2563EB' },

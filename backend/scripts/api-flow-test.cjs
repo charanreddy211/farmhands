@@ -181,11 +181,74 @@ async function run() {
 
   const group = await call(`/groups/${workerId}`, {
     method: 'PUT',
-    body: { name: 'API Test Crew', memberNames: ['Test Member'] },
+    body: { name: 'API Test Crew', memberNames: ['Test Member'], availableMemberNames: [], workAsGroup: true },
   });
-  assert.equal(group.data.size, 2);
+  assert.equal(group.data.size, 1);
+  assert.deepEqual(group.data.availableMemberNames, []);
+  const soloMemberSearch = await call(`/workers?from=${farmDate(1)}&to=${farmDate(1)}`);
+  assert.equal(soloMemberSearch.data.workers.find((item) => item.id === workerId).groupSize, 1);
+  const soloGroup = await call(`/groups/${workerId}`, {
+    method: 'PUT',
+    body: { name: 'API Test Crew', memberNames: ['Test Member'], availableMemberNames: ['Test Member'], workAsGroup: false },
+  });
+  assert.equal(soloGroup.data.size, 2);
+  const readyGroup = await call(`/groups/${workerId}`, {
+    method: 'PUT',
+    body: { name: 'API Test Crew', memberNames: ['Test Member'], availableMemberNames: ['Test Member'], workAsGroup: true },
+  });
+  assert.equal(readyGroup.data.size, 2);
+  const partiallyReadyGroup = await call(`/groups/${workerId}`, {
+    method: 'PUT',
+    body: {
+      name: 'API Test Crew',
+      memberNames: ['Test Member', 'Another Member'],
+      availableMemberNames: ['Another Member'],
+      workAsGroup: true,
+    },
+  });
+  assert.equal(partiallyReadyGroup.data.size, 2);
+  const partialCrewSearch = await call(`/workers?from=${farmDate(1)}&to=${farmDate(1)}`);
+  assert.equal(partialCrewSearch.data.workers.find((item) => item.id === workerId).groupSize, 1);
+  await call(`/groups/${workerId}`, {
+    method: 'PUT',
+    body: { name: 'API Test Crew', memberNames: ['Test Member'], availableMemberNames: ['Test Member'], workAsGroup: true },
+  });
+  const savedAvailability = await call(`/users/${workerId}`, {
+    method: 'PATCH',
+    body: { labourAvailableDates: [
+      ...(sameDayAvailabilityOpen() ? [farmDate()] : []),
+      farmDate(1), farmDate(2), farmDate(3), farmDate(4), farmDate(5),
+      farmDate(6), farmDate(7), farmDate(8), farmDate(9),
+    ], labourAvailablePeopleByDate: {
+      [farmDate(1)]: 1,
+      [farmDate(6)]: 2,
+    } },
+  });
+  assert.equal(savedAvailability.data.labourAvailablePeopleByDate[farmDate(1)], 1);
+  assert.equal(savedAvailability.data.labourAvailablePeopleByDate[farmDate(6)], 2);
+  const updatedAvailability = await call(`/users/${workerId}`, {
+    method: 'PATCH',
+    body: { labourAvailablePeopleByDate: { [farmDate(1)]: 2 } },
+  });
+  assert.equal(updatedAvailability.data.labourAvailablePeopleByDate[farmDate(1)], 2);
+  const restoredAvailability = await call(`/users/${workerId}`, {
+    method: 'PATCH',
+    body: { labourAvailablePeopleByDate: { [farmDate(1)]: 1 } },
+  });
+  assert.equal(restoredAvailability.data.labourAvailablePeopleByDate[farmDate(1)], 1);
+  await call(`/users/${workerId}`, {
+    method: 'PATCH',
+    body: { labourAvailablePeopleByDate: { [farmDate(1)]: 31 } },
+    expected: 400,
+  });
+  const newlyAvailableDateSearch = await call(`/workers?from=${farmDate(6)}&to=${farmDate(6)}`);
+  assert.equal(newlyAvailableDateSearch.data.workers.find((item) => item.id === workerId).groupSize, 2);
+  const existingDateSearch = await call(`/workers?from=${farmDate(1)}&to=${farmDate(1)}`);
+  assert.equal(existingDateSearch.data.workers.find((item) => item.id === workerId).groupSize, 1);
   const fetchedGroup = await call(`/groups/${workerId}`);
   assert.equal(fetchedGroup.data.name, 'API Test Crew');
+  assert.equal(fetchedGroup.data.workAsGroup, true);
+  assert.deepEqual(fetchedGroup.data.availableMemberNames, ['Test Member']);
   await call(`/groups/${workerId}`, {
     method: 'PUT',
     body: { name: 'API Test Crew', memberNames: [''] },
@@ -223,6 +286,41 @@ async function run() {
   const initialSearch = await call(`/workers?from=${farmDate(1)}&to=${farmDate(1)}&farmerId=${farmerId}`);
   const workerInSearch = initialSearch.data.workers.find((item) => item.id === workerId && item.available);
   assert.ok(workerInSearch);
+  assert.equal(workerInSearch.groupSize, 1);
+  const dateAvailability = initialSearch.data.availabilityByDate.find((item) => item.date === farmDate(1));
+  assert.ok(dateAvailability);
+  assert.equal(dateAvailability.peopleCount, 1);
+  assert.equal(dateAvailability.workerCount, 1);
+  assert.equal(initialSearch.data.availablePeopleCount, 1);
+  const twoKmLongitude = 2 * Math.asin(Math.sin(2 / (2 * 6371))) * 180 / Math.PI;
+  await call(`/users/${workerId}`, {
+    method: 'PATCH',
+    body: { labourLatitude: 0, labourLongitude: twoKmLongitude, labourTravelRadius: 25 },
+  });
+  const withinThreeKmSearch = await call(`/workers?from=${farmDate(1)}&to=${farmDate(1)}&latitude=0&longitude=0&maxDistanceKm=3`);
+  assert.ok(withinThreeKmSearch.data.workers.some((item) => item.id === workerId));
+  assert.ok(withinThreeKmSearch.data.rangeCounts['3'] > 0);
+  assert.ok(withinThreeKmSearch.data.rangeCounts['5'] >= withinThreeKmSearch.data.rangeCounts['3']);
+  const exactFiveKmLongitude = 2 * Math.asin(Math.sin(5 / (2 * 6371))) * 180 / Math.PI;
+  await call(`/users/${workerId}`, {
+    method: 'PATCH',
+    body: { labourLatitude: 0, labourLongitude: exactFiveKmLongitude, labourTravelRadius: 25 },
+  });
+  const exactFiveKmSearch = await call(`/workers?from=${farmDate(1)}&to=${farmDate(1)}&latitude=0&longitude=0&maxDistanceKm=5`);
+  const exactFiveKmWorker = exactFiveKmSearch.data.workers.find((item) => item.id === workerId);
+  assert.ok(exactFiveKmWorker, 'A worker exactly 5 km away should be included in the 5 km range.');
+  assert.equal(exactFiveKmWorker.distanceKm, 5);
+  assert.ok(exactFiveKmSearch.data.rangeCounts['5'] >= exactFiveKmSearch.data.rangeCounts['3']);
+  assert.equal(typeof exactFiveKmSearch.data.unlocatedCount, 'number');
+  await call(`/users/${workerId}`, { method: 'PATCH', body: { labourTravelRadius: 3 } });
+  const travelRadiusSearch = await call(`/workers?from=${farmDate(1)}&to=${farmDate(1)}&latitude=0&longitude=0&maxDistanceKm=5`);
+  assert.ok(!travelRadiusSearch.data.workers.some((item) => item.id === workerId), 'A worker outside their travel radius should not be shown.');
+  await call(`/users/${workerId}`, { method: 'PATCH', body: { labourTravelRadius: 25 } });
+  await call(`/workers?from=${farmDate(1)}&to=${farmDate(1)}&latitude=0&longitude=0&maxDistanceKm=4`, { expected: 400 });
+  pass('distance range boundary, range counts, worker travel radius, and fixed-range validation');
+  const laterGroupSearch = await call(`/workers?from=${farmDate(6)}&to=${farmDate(6)}&farmerId=${farmerId}`);
+  assert.equal(laterGroupSearch.data.workers.find((item) => item.id === workerId).groupSize, 2);
+  assert.equal(laterGroupSearch.data.availabilityByDate.find((item) => item.date === farmDate(6)).peopleCount, 2);
   assert.equal(workerInSearch.labourShift, 'morning');
   const todaySearch = await call(`/workers?from=${farmDate()}&to=${farmDate()}&farmerId=${farmerId}`);
   const workerToday = todaySearch.data.workers.find((item) => item.id === workerId);
@@ -319,11 +417,14 @@ async function run() {
     assert.match(lateSameDayRequest.data.message, /before 7:00 a\.m\./i);
   }
 
-  const acceptedRequest = await createRequest('accepted booking', farmDate(1));
+  const acceptedRequest = await createRequest('accepted booking', farmDate(6));
+  const overlappingRequest = await createRequest('overlapping booking request', farmDate(6));
   const allRequests = await call('/requests?status=open');
   assert.ok(allRequests.data.some((item) => item.id === acceptedRequest.id));
   const pendingWorkerRequests = await call(`/requests/worker/${workerId}?bucket=new`);
-  assert.ok(pendingWorkerRequests.data.some((item) => item.request.id === acceptedRequest.id));
+  const pendingWorkerRequest = pendingWorkerRequests.data.find((item) => item.request.id === acceptedRequest.id);
+  assert.ok(pendingWorkerRequest);
+  assert.equal(pendingWorkerRequest.maxAcceptingPeople, 2);
   const farmerPending = await call(`/requests/bookings/${farmerId}?role=farmer&bucket=pending`);
   const pendingRequest = farmerPending.data.find((item) => item.request.id === acceptedRequest.id);
   assert.ok(pendingRequest);
@@ -341,12 +442,26 @@ async function run() {
   });
   const workerAccepted = await call(`/requests/worker/${workerId}?bucket=accepted`);
   assert.ok(workerAccepted.data.some((item) => item.request.id === acceptedRequest.id && item.bookingStatus === 'confirmed'));
+  const workerPastAfterAccept = await call(`/requests/worker/${workerId}?bucket=past`);
+  assert.ok(workerPastAfterAccept.data.some((item) =>
+    item.request.id === overlappingRequest.id
+      && item.responseStatus === 'declined'
+      && item.declineReason === 'already_booked'));
+  const farmerPastAfterAccept = await call(`/requests/bookings/${farmerId}?role=farmer&bucket=past`);
+  assert.ok(farmerPastAfterAccept.data.some((item) =>
+    item.request.id === overlappingRequest.id
+      && item.responseStatus === 'declined'
+      && item.declineReason === 'already_booked'));
+  const farmerPendingAfterAccept = await call(`/requests/bookings/${farmerId}?role=farmer&bucket=pending`);
+  assert.ok(!farmerPendingAfterAccept.data.some((item) => item.request.id === overlappingRequest.id));
   await call(`/requests/bookings/${workerId}?role=labour&bucket=upcoming`);
   await call(`/requests/bookings/${workerId}?role=labour&bucket=pending`);
   const farmerBookings = await call(`/requests/bookings/${farmerId}?role=farmer&bucket=upcoming`);
-  assert.ok(farmerBookings.data.some((item) => item.request.id === acceptedRequest.id && item.booking.status === 'confirmed'));
+  assert.ok(farmerBookings.data.some((item) =>
+    item.request.id === acceptedRequest.id && item.booking.status === 'confirmed' && item.booking.peopleCount === 2));
   const bookingDetails = await call(`/requests/bookings/${acceptedRequest.id}/${workerId}?userId=${farmerId}`);
   assert.equal(bookingDetails.data.booking.status, 'confirmed');
+  assert.equal(bookingDetails.data.booking.peopleCount, 2);
   assert.equal(bookingDetails.data.worker.phone, workerPhone);
   await call(`/requests/bookings/${acceptedRequest.id}/${workerId}?userId=${outsiderId}`, { expected: 403 });
   await call(`/requests/bookings/${acceptedRequest.id}/${workerId}/cancel`, {
@@ -355,7 +470,7 @@ async function run() {
     expected: 403,
   });
 
-  const bookedDateSearch = await call(`/workers?from=${farmDate(1)}&to=${farmDate(1)}&farmerId=${farmerId}`);
+  const bookedDateSearch = await call(`/workers?from=${farmDate(6)}&to=${farmDate(6)}&farmerId=${farmerId}`);
   assert.ok(!bookedDateSearch.data.workers.some((item) => item.id === workerId));
   assert.ok(bookedDateSearch.data.bookedWorkerIds.includes(workerId));
   const laterDateSearch = await call(`/workers?from=${farmDate(2)}&to=${farmDate(2)}&farmerId=${farmerId}`);
@@ -367,8 +482,8 @@ async function run() {
       workType: 'Harvesting',
       crop: 'Maize',
       area: 'Akloor',
-      startDate: farmDate(1),
-      endDate: farmDate(1),
+      startDate: farmDate(6),
+      endDate: farmDate(6),
       peopleNeeded: 1,
       payPerDay: 600,
       farmerId,
@@ -377,7 +492,7 @@ async function run() {
     expected: 400,
   });
   assert.match(conflicts.data.message, /confirmed booking/i);
-  pass('request acceptance, pre/post-acceptance phone access, booking views, duplicate response, date exclusion, and booking conflict validation');
+  pass('availability-based headcount confirmation, booking views, duplicate response, date exclusion, and booking conflict validation');
 
   const alerts = await call(`/workers/${farmerId}/alerts`);
   assert.ok(alerts.data.some((item) => item.type === 'accepted' && item.requestId === acceptedRequest.id));
@@ -388,7 +503,7 @@ async function run() {
     method: 'POST',
     body: { userId: farmerId, reason: 'plans_changed' },
   });
-  const reopenedDateSearch = await call(`/workers?from=${farmDate(1)}&to=${farmDate(1)}`);
+  const reopenedDateSearch = await call(`/workers?from=${farmDate(6)}&to=${farmDate(6)}`);
   assert.ok(reopenedDateSearch.data.workers.some((item) => item.id === workerId && item.available));
   await call(`/requests/bookings/${acceptedRequest.id}/${workerId}/cancel`, {
     method: 'POST',
@@ -397,21 +512,21 @@ async function run() {
   });
   pass('booking cancellation and availability restoration');
 
-  const declinedRequest = await createRequest('declined request', farmDate(3));
+  const declinedRequest = await createRequest('declined request', farmDate(7));
   await call(`/requests/${declinedRequest.id}/respond`, {
     method: 'POST',
     body: { workerId, status: 'declined', declineReason: 'too_far' },
   });
   await call(`/requests/${declinedRequest.id}/respond`, {
     method: 'POST',
-    body: { workerId, status: 'accepted' },
+    body: { workerId, status: 'accepted', peopleCount: 1 },
     expected: 400,
   });
   const workerPast = await call(`/requests/worker/${workerId}?bucket=past`);
   assert.ok(workerPast.data.some((item) => item.request.id === declinedRequest.id && item.responseStatus === 'declined'));
   pass('worker decline and past request flow');
 
-  const closedRequest = await createRequest('repeat request', farmDate(4));
+  const closedRequest = await createRequest('repeat request', farmDate(8));
   await call(`/requests/${closedRequest.id}/cancel`, {
     method: 'POST',
     body: { userId: farmerId, reason: 'dates_changed' },
@@ -426,10 +541,10 @@ async function run() {
   assert.ok(repeatedPending.data.some((item) => item.request.id === repeatedRequest.data.id));
   pass('open request cancellation and repeat flow');
 
-  const reviewRequest = await createRequest('completed review', farmDate(1));
+  const reviewRequest = await createRequest('completed review', farmDate(9));
   await call(`/requests/${reviewRequest.id}/respond`, {
     method: 'POST',
-    body: { workerId, status: 'accepted' },
+    body: { workerId, status: 'accepted', peopleCount: 2 },
   });
   const db = new Client({
     host: process.env.DB_HOST || 'localhost',

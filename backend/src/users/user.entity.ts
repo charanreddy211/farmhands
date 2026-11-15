@@ -7,6 +7,8 @@ export type FarmLocation = {
   crop: string;
   address: string;
   mapLink: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
 };
 
 const dateArrayTransformer: ValueTransformer = {
@@ -78,6 +80,9 @@ export class User {
 
   @Column({ type: 'date', array: true, default: () => "'{}'", transformer: dateArrayTransformer })
   labourAvailableDates!: string[];
+
+  @Column({ type: 'jsonb', default: () => "'{}'::jsonb" })
+  labourAvailablePeopleByDate!: Record<string, number>;
 
   @Column({ type: 'varchar', length: 10, default: 'full_day' })
   labourShift!: 'morning' | 'full_day';

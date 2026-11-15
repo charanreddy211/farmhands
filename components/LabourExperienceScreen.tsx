@@ -1,12 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, AppState, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { ActivityIndicator, AppState, Image, Modal, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
 import Text from './AppText';
 import AppTextInput from './AppTextInput';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
-import { ProfileDetails, updateProfile, UserProfile } from '../api/profile';
+import * as ImagePicker from 'expo-image-picker';
+import { ProfileDetails, updateProfile, uploadProfileImage, UserProfile } from '../api/profile';
 import { reverseGeocodeLocation } from '../api/places';
 import { fetchWorkerRequests } from '../api/requests';
+import { fetchLabourGroup } from '../api/groups';
 import { colors } from '../theme';
 
 type Screen = 'home' | 'skills' | 'availability' | 'profile';
@@ -37,6 +40,11 @@ function canSetSameDayAvailability(now: Date): boolean {
   return hour < 7;
 }
 
+function isAvailabilityDateCurrent(key: string, now: Date): boolean {
+  const today = dateKey(now);
+  return key > today || (key === today && canSetSameDayAvailability(now));
+}
+
 function isProfileComplete(profile: UserProfile): boolean {
   return Boolean(
     profile.firstName.trim()
@@ -50,6 +58,7 @@ function isProfileComplete(profile: UserProfile): boolean {
 export default function LabourExperienceScreen({ userId, profile, initialScreen, onProfileChange, onOpenRequests, onOpenGroup, onSignOut }: Props) {
   const firstScreen = profile.onboardingComplete && isProfileComplete(profile) ? initialScreen ?? 'home' : 'setup';
   const [screen, setScreen] = useState<Screen | 'setup'>(firstScreen);
+  const screenHistory = useRef<Array<Screen | 'setup'>>([]);
   const [name, setName] = useState(`${profile.firstName} ${profile.lastName}`.trim());
   const [area, setArea] = useState(profile.labourArea);
   const [rate, setRate] = useState(profile.labourDailyRate?.toString() ?? '');
@@ -63,8 +72,9 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
   const [locating, setLocating] = useState(false);
   const [skills, setSkills] = useState(profile.labourSkills);
   const [newSkill, setNewSkill] = useState('');
-  const [selectedDates, setSelectedDates] = useState(() => new Set(profile.labourAvailableDates));
-  const [selectedAvailabilityDate, setSelectedAvailabilityDate] = useState(() => dateKey(new Date()));
+  const [selectedDates, setSelectedDates] = useState(() => new Set(profile.labourAvailableDates.filter((date) => isAvailabilityDateCurrent(date, new Date()))));
+  const [availabilityPeopleByDate, setAvailabilityPeopleByDate] = useState(() => profile.labourAvailablePeopleByDate ?? {});
+  const [availabilityChoiceDate, setAvailabilityChoiceDate] = useState<string | null>(null);
   const [calendarMonth, setCalendarMonth] = useState(() => {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), 1);
@@ -74,14 +84,48 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
   const [bookedDates, setBookedDates] = useState<Set<string>>(() => new Set());
   const [bookingsLoading, setBookingsLoading] = useState(true);
   const [bookingsError, setBookingsError] = useState('');
+  const [groupCapacity, setGroupCapacity] = useState(1);
+  const [groupMemberNames, setGroupMemberNames] = useState<string[]>([]);
+  const [groupLoading, setGroupLoading] = useState(true);
+  const [groupError, setGroupError] = useState('');
   const [newRequestCount, setNewRequestCount] = useState(0);
   const [requestCountError, setRequestCountError] = useState('');
   const [requestCountRetry, setRequestCountRetry] = useState(0);
   const [signingOut, setSigningOut] = useState(false);
+  const [profileImageSaving, setProfileImageSaving] = useState(false);
+  const [languagePickerOpen, setLanguagePickerOpen] = useState(false);
+
+  function navigateScreen(nextScreen: Screen | 'setup') {
+    if (nextScreen === screen) return;
+    screenHistory.current.push(screen);
+    setScreen(nextScreen);
+  }
+
+  function goBack() {
+    setScreen(screenHistory.current.pop() ?? 'home');
+  }
+
+  function goHome() {
+    screenHistory.current = [];
+    setScreen('home');
+  }
   const [confirmSignOut, setConfirmSignOut] = useState(false);
   const [error, setError] = useState('');
+  function availabilityCapacity(date: string): number {
+    const savedCapacity = availabilityPeopleByDate[date];
+    if (typeof savedCapacity === 'number' && Number.isInteger(savedCapacity) && savedCapacity >= 1) return savedCapacity;
+    return selectedDates.has(date) ? 1 : groupCapacity;
+  }
+
   useEffect(() => {
-    const updateTime = () => setNow(new Date());
+    const updateTime = () => {
+      const currentTime = new Date();
+      setNow(currentTime);
+      setSelectedDates((current) => {
+        const next = [...current].filter((date) => isAvailabilityDateCurrent(date, currentTime));
+        return next.length === current.size ? current : new Set(next);
+      });
+    };
     const interval = setInterval(updateTime, 30000);
     const subscription = AppState.addEventListener('change', updateTime);
     return () => {
@@ -109,6 +153,22 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
       setBookingsLoading(false);
     }
   }
+  useEffect(() => {
+    let active = true;
+    fetchLabourGroup(userId)
+      .then((group) => {
+        if (active) {
+          setGroupCapacity(group?.size ?? 1);
+          setGroupMemberNames(group?.memberNames ?? []);
+          setGroupError('');
+        }
+      })
+      .catch((loadError) => {
+        if (active) setGroupError(loadError instanceof Error ? loadError.message : 'Could not load your available group size.');
+      })
+      .finally(() => { if (active) setGroupLoading(false); });
+    return () => { active = false; };
+  }, [userId]);
   useEffect(() => {
     let active = true;
     const refresh = async () => {
@@ -204,8 +264,13 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
         setLocationDirty(false);
       }
       setSkills(saved.labourSkills);
-      setSelectedDates(new Set(saved.labourAvailableDates));
-      if (nextScreen) setScreen(nextScreen);
+      setSelectedDates(new Set(saved.labourAvailableDates.filter((date) => isAvailabilityDateCurrent(date, now))));
+      setAvailabilityPeopleByDate(saved.labourAvailablePeopleByDate ?? {});
+      if (nextScreen) {
+        if (screenHistory.current[screenHistory.current.length - 1] === nextScreen) screenHistory.current.pop();
+        if (nextScreen === 'home') screenHistory.current = [];
+        setScreen(nextScreen);
+      }
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Could not save your worker profile. Please try again.');
     } finally {
@@ -300,65 +365,115 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
     setError('');
   }
 
-  function toggleDate(date: Date) {
-    if (dateKey(date) < dateKey(new Date())) return;
-    setSelectedAvailabilityDate(dateKey(date));
-  }
-
-  function toggleSelectedDateAvailability() {
-    if (bookedDates.has(selectedAvailabilityDate) || bookingsLoading || bookingsError) return;
-    if (selectedAvailabilityDate === dateKey(now) && !canSetSameDayAvailability(now)) {
-      setError('Same-day availability closes at 7:00 a.m. India time.');
-      return;
-    }
-    const isAvailable = selectedDates.has(selectedAvailabilityDate);
+  function openAvailabilityChoice(date: Date) {
+    const key = dateKey(date);
+    if (!isAvailabilityDateCurrent(key, now) || bookedDates.has(key) || bookingsLoading || bookingsError) return;
+    const isAvailable = selectedDates.has(key);
     if (!isAvailable && selectedDates.size >= 366) {
       setError('You can set availability for up to 366 dates.');
       return;
     }
-    setError('');
-    setSelectedDates((current) => {
-      const next = new Set(current);
-      if (isAvailable) next.delete(selectedAvailabilityDate);
-      else next.add(selectedAvailabilityDate);
-      return next;
-    });
-  }
-
-  async function saveAvailability() {
-    const today = dateKey(now);
-    const dates = [...selectedDates].filter((date) => date !== today || canSetSameDayAvailability(now)).sort();
-    await saveProfile({
-      labourAvailableDates: dates,
-      labourAvailable: canSetSameDayAvailability(now) && selectedDates.has(today) && !bookedDates.has(today),
-    }, 'home');
-  }
-
-  async function toggleWeekday(date: Date) {
-    const key = dateKey(date);
-    if (bookingsLoading || bookingsError || bookedDates.has(key)) return;
-    if (key < dateKey(now)) return;
     if (key === dateKey(now) && !canSetSameDayAvailability(now)) {
       setError('Same-day availability closes at 7:00 a.m. India time.');
       return;
     }
+    setError('');
+    setAvailabilityChoiceDate(key);
+  }
+
+  function chooseAvailability(capacity: number | null) {
+    if (!availabilityChoiceDate) return;
     const nextDates = new Set(selectedDates);
-    if (nextDates.has(key)) nextDates.delete(key);
-    else nextDates.add(key);
-    if (nextDates.size > 366) {
-      setError('You can set availability for up to 366 dates.');
+    const nextCapacities = { ...availabilityPeopleByDate };
+    if (capacity === null) {
+      nextDates.delete(availabilityChoiceDate);
+      delete nextCapacities[availabilityChoiceDate];
+    } else {
+      nextDates.add(availabilityChoiceDate);
+      nextCapacities[availabilityChoiceDate] = capacity;
+    }
+    setAvailabilityChoiceDate(null);
+    if (screen === 'home') {
+      const today = dateKey(now);
+      void saveProfile({
+        labourAvailableDates: [...nextDates].sort(),
+        labourAvailablePeopleByDate: Object.fromEntries([...nextDates].map((date) => [date, nextCapacities[date] ?? 1])),
+        labourAvailable: canSetSameDayAvailability(now) && nextDates.has(today) && !bookedDates.has(today),
+      });
       return;
     }
-    setError('');
+    setSelectedDates(nextDates);
+    setAvailabilityPeopleByDate(nextCapacities);
+  }
+
+  async function saveAvailability() {
+    const today = dateKey(now);
+    const dates = [...selectedDates].filter((date) => isAvailabilityDateCurrent(date, now)).sort();
     await saveProfile({
-      labourAvailableDates: [...nextDates].sort(),
-      labourAvailable: canSetSameDayAvailability(now) && nextDates.has(dateKey(now)) && !bookedDates.has(dateKey(now)),
-    });
+      labourAvailableDates: dates,
+      labourAvailablePeopleByDate: Object.fromEntries(dates.map((date) => [date, availabilityPeopleByDate[date] ?? 1])),
+      labourAvailable: canSetSameDayAvailability(now) && selectedDates.has(today) && !bookedDates.has(today),
+    }, 'home');
+  }
+
+  function toggleWeekday(date: Date) {
+    const key = dateKey(date);
+    if (bookingsLoading || bookingsError || bookedDates.has(key)) return;
+    if (!isAvailabilityDateCurrent(key, now)) return;
+    if (key === dateKey(now) && !canSetSameDayAvailability(now)) {
+      setError('Same-day availability closes at 7:00 a.m. India time.');
+      return;
+    }
+    openAvailabilityChoice(date);
   }
 
   async function updateShift(shift: 'morning' | 'full_day') {
     if (shift === profile.labourShift || saving) return;
     await saveProfile({ labourShift: shift });
+  }
+
+  async function chooseProfileImage() {
+    setError('');
+    try {
+      if (Platform.OS !== 'web') {
+        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!permission.granted) {
+          setError('Allow photo library access to choose a profile image.');
+          return;
+        }
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+      if (result.canceled) return;
+
+      setProfileImageSaving(true);
+      const profileImageUrl = await uploadProfileImage(userId, result.assets[0]);
+      const updated = await updateProfile(userId, { profileImageUrl });
+      onProfileChange(updated);
+    } catch (imageError) {
+      setError(imageError instanceof Error ? imageError.message : 'Could not save your profile photo. Please try again.');
+    } finally {
+      setProfileImageSaving(false);
+    }
+  }
+
+  async function savePreferredLanguage(language: 'en' | 'te') {
+    if (language === 'te' || language === profile.preferredLanguage || saving) return;
+    setSaving(true);
+    setError('');
+    try {
+      const updated = await updateProfile(userId, { preferredLanguage: language });
+      onProfileChange(updated);
+      setLanguagePickerOpen(false);
+    } catch (languageError) {
+      setError(languageError instanceof Error ? languageError.message : 'Could not update your language preference.');
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function signOut() {
@@ -390,15 +505,50 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
       : screen === 'skills'
         ? 'నా పని నైపుణ్యాలు'
         : 'మీ పని, మీ ఇష్టం.';
+  const profileInitials = `${profile.firstName.charAt(0)}${profile.lastName.charAt(0)}`.toUpperCase() || 'F';
 
   return <View style={styles.page}>
-    <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-      <View style={styles.headingRow}>
+    {screen === 'profile' && <View style={styles.profileAppHeader}>
+      <View style={styles.profileBrand}>
+        <View style={styles.profileBrandIcon}><Icon name="leaf-outline" size={20} color={colors.primary} /></View>
+        <View>
+          <Text style={styles.profileBrandName}>Farmhands</Text>
+          <Text style={styles.profileBrandSubtitle}>Profile &amp; Account</Text>
+        </View>
+      </View>
+      <Pressable style={styles.profileNotification} onPress={onOpenRequests} accessibilityRole="button" accessibilityLabel="Open work requests">
+        <Icon name="notifications-outline" size={20} color={colors.muted} />
+        {newRequestCount > 0 && <View style={styles.requestBadge}><Text style={styles.requestBadgeText}>{newRequestCount > 9 ? '9+' : newRequestCount}</Text></View>}
+      </Pressable>
+      <View style={styles.profileHeaderAvatar}>
+        {profile.profileImageUrl
+          ? <Image source={{ uri: profile.profileImageUrl }} style={styles.profileHeaderAvatarImage} />
+          : <Text style={styles.profileHeaderAvatarText}>{profileInitials}</Text>}
+      </View>
+    </View>}
+    <ScrollView contentContainerStyle={[styles.content, screen === 'profile' && styles.profileContent]} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+      {screen === 'profile' ? <View style={styles.profileHeadingRow}>
+        <Pressable style={styles.profileHeaderButton} onPress={goBack} accessibilityRole="button" accessibilityLabel="Back to worker home">
+          <Icon name="chevron-back" size={22} color={colors.text} />
+        </Pressable>
+        <Text style={styles.profilePageHeading}>My profile</Text>
+        <Pressable style={styles.profileHeaderButton} onPress={() => navigateScreen('setup')} accessibilityRole="button" accessibilityLabel="Edit work profile">
+          <Icon name="options-outline" size={20} color={colors.primary} />
+        </Pressable>
+      </View> : <View style={styles.headingRow}>
+        {screen !== 'home' && (screen !== 'setup' || screenHistory.current.length > 0) && <Pressable
+          style={styles.profileBackButton}
+          onPress={goBack}
+          accessibilityRole="button"
+          accessibilityLabel={`Back to ${screenHistory.current[screenHistory.current.length - 1] ?? 'worker home'}`}
+        >
+          <Icon name="chevron-back" size={22} color={colors.primary} />
+        </Pressable>}
         <View style={styles.headingCopy}>
           <Text style={styles.heading}>{screen === 'home' ? <>Ready to <Text style={styles.headingAccent}>work?</Text></> : title}</Text>
           <Text style={styles.subtitle}>{subtitle}</Text>
         </View>
-      </View>
+      </View>}
       {screen === 'home' && !!requestCountError && <View style={styles.requestCountError}>
         <Text style={styles.requestCountErrorText} accessibilityRole="alert">{requestCountError}</Text>
         <Pressable onPress={() => setRequestCountRetry((attempt) => attempt + 1)} accessibilityRole="button" accessibilityLabel="Retry checking new requests">
@@ -447,10 +597,24 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
               ? 'Loading your confirmed bookings…'
               : bookingsError
                 ? `Could not load booking details: ${bookingsError}`
-                : 'Booked days are locked. Tap any other future date to change availability.'}
+                : groupLoading
+                  ? 'Loading your available group size…'
+                  : groupError
+                    ? `Could not load your group availability: ${groupError}`
+                    : 'Choose who is available for each date. You can change the choice or mark an available date unavailable. Booked and expired dates are locked.'}
           </Text>
           {!!bookingsError && <Pressable onPress={() => { void refreshBookedDates(); }} accessibilityRole="button">
             <Text style={styles.calendarLink}>Retry</Text>
+          </Pressable>}
+          {!!groupError && <Pressable onPress={() => {
+            setGroupLoading(true);
+            setGroupError('');
+            void fetchLabourGroup(userId)
+              .then((group) => setGroupCapacity(group?.size ?? 1))
+              .catch((loadError) => setGroupError(loadError instanceof Error ? loadError.message : 'Could not load your available group size.'))
+              .finally(() => setGroupLoading(false));
+          }} accessibilityRole="button">
+            <Text style={styles.calendarLink}>Retry group size</Text>
           </Pressable>}
           {!canSetSameDayAvailability(now) && <Text style={styles.cutoffNote}>Same-day availability closes at 7:00 a.m. India time.</Text>}
         </View>
@@ -468,43 +632,24 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
             const key = dateKey(date);
             const booked = bookedDates.has(key);
             const sameDayClosed = key === dateKey(now) && !canSetSameDayAvailability(now);
-            const available = selectedDates.has(key) && !booked && !sameDayClosed;
-            const active = selectedAvailabilityDate === key;
+            const available = selectedDates.has(key) && isAvailabilityDateCurrent(key, now) && !booked;
+            const capacity = availabilityCapacity(key);
             const past = key < dateKey(new Date());
-            const disabled = past || booked || sameDayClosed || bookingsLoading || !!bookingsError;
+            const disabled = past || booked || sameDayClosed || bookingsLoading || !!bookingsError || groupLoading || saving;
             return <Pressable
               key={key}
-              style={[styles.calendarCell, available && styles.calendarDayAvailable, booked && styles.calendarDayBooked, active && styles.calendarDayActive, disabled && styles.calendarDayPast]}
-              onPress={() => toggleDate(date)}
+              style={[styles.calendarCell, available && styles.calendarDayAvailable, booked && styles.calendarDayBooked, disabled && styles.calendarDayPast]}
+              onPress={() => openAvailabilityChoice(date)}
               disabled={disabled}
               accessibilityRole="button"
-              accessibilityLabel={`${date.toLocaleDateString('en-IN', { dateStyle: 'full' })}${booked ? ', booked' : ''}`}
-              accessibilityHint={booked ? 'This date is booked and cannot be changed.' : available ? 'Available. Select this date to change its availability.' : 'Not available. Select this date to change its availability.'}
-              accessibilityState={{ selected: active, disabled }}
+              accessibilityLabel={`${date.toLocaleDateString('en-IN', { dateStyle: 'full' })}${booked ? ', booked' : available ? `, ${capacity} ${capacity === 1 ? 'person' : 'people'} free` : ''}`}
+              accessibilityHint={booked ? 'This date is booked and cannot be changed.' : available ? 'Select to change who is available or mark unavailable.' : 'Select to choose who is available.'}
+              accessibilityState={{ selected: available, disabled }}
             >
               <Text style={[styles.calendarDayText, available && styles.calendarDayTextAvailable, booked && styles.calendarDayTextBooked, disabled && styles.calendarDayTextPast]}>{date.getDate()}</Text>
+              {available && !groupLoading && !groupError && <Text style={styles.calendarDayCapacity}>{capacity} free</Text>}
             </Pressable>;
           })}
-        </View>
-        <View style={styles.infoCard}>
-          <View style={styles.availabilityCopy}>
-            <Text style={styles.cardHeading}>Available on {new Date(`${selectedAvailabilityDate}T00:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'long' })}?</Text>
-            <Text style={styles.cardText}>{bookedDates.has(selectedAvailabilityDate)
-              ? 'You are booked for this date.'
-              : selectedAvailabilityDate === dateKey(now) && !canSetSameDayAvailability(now)
-              ? 'Same-day availability closed at 7:00 a.m. India time.'
-              : selectedDates.has(selectedAvailabilityDate) ? 'Farmers can find you on this date.' : 'You are not listed as available on this date.'}</Text>
-          </View>
-          <Pressable
-            style={[styles.switchTrack, selectedDates.has(selectedAvailabilityDate) && !bookedDates.has(selectedAvailabilityDate) && !(selectedAvailabilityDate === dateKey(now) && !canSetSameDayAvailability(now)) && styles.switchTrackOn]}
-            onPress={toggleSelectedDateAvailability}
-            disabled={bookedDates.has(selectedAvailabilityDate) || bookingsLoading || !!bookingsError || (selectedAvailabilityDate === dateKey(now) && !canSetSameDayAvailability(now))}
-            accessibilityRole="switch"
-            accessibilityLabel={`Available to work on ${new Date(`${selectedAvailabilityDate}T00:00:00`).toLocaleDateString('en-IN', { dateStyle: 'full' })}`}
-            accessibilityState={{ checked: selectedDates.has(selectedAvailabilityDate) && !bookedDates.has(selectedAvailabilityDate) && !(selectedAvailabilityDate === dateKey(now) && !canSetSameDayAvailability(now)), disabled: bookedDates.has(selectedAvailabilityDate) || bookingsLoading || !!bookingsError || (selectedAvailabilityDate === dateKey(now) && !canSetSameDayAvailability(now)) }}
-          >
-            <View style={[styles.switchThumb, selectedDates.has(selectedAvailabilityDate) && !(selectedAvailabilityDate === dateKey(now) && !canSetSameDayAvailability(now)) && styles.switchThumbOn]} />
-          </Pressable>
         </View>
         <View style={styles.legendRow}>
           <View style={styles.legendItem}><View style={styles.legendFree} /><Text style={styles.cardText}>Available</Text></View>
@@ -514,6 +659,7 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
         <View style={styles.quickActions}>
           <Pressable style={styles.outlineChip} onPress={() => {
             const next = new Set(selectedDates);
+            const nextCapacities = { ...availabilityPeopleByDate };
             const year = calendarMonth.getFullYear();
             const month = calendarMonth.getMonth();
             const dayCount = new Date(year, month + 1, 0).getDate();
@@ -521,7 +667,10 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
               const date = new Date(year, month, day);
               const key = dateKey(date);
               if (date.getDay() !== 0 && date.getDay() !== 6 && key >= dateKey(now) && !bookedDates.has(key)
-                && (key !== dateKey(now) || canSetSameDayAvailability(now))) next.add(key);
+                && (key !== dateKey(now) || canSetSameDayAvailability(now))) {
+                next.add(key);
+                if (!nextCapacities[key]) nextCapacities[key] = groupCapacity;
+              }
             }
             if (next.size > 366) {
               setError('You can set availability for up to 366 dates.');
@@ -529,13 +678,16 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
             }
             setError('');
             setSelectedDates(next);
-          }} disabled={bookingsLoading || !!bookingsError} accessibilityRole="button"><Text style={styles.outlineChipText}>Every weekday</Text></Pressable>
+            setAvailabilityPeopleByDate(nextCapacities);
+          }} disabled={bookingsLoading || !!bookingsError || groupLoading} accessibilityRole="button"><Text style={styles.outlineChipText}>Every weekday</Text></Pressable>
           <Pressable style={styles.outlineChip} onPress={() => {
-            setSelectedDates(new Set([...selectedDates].filter((date) => bookedDates.has(date))));
+            const nextDates = new Set([...selectedDates].filter((date) => isAvailabilityDateCurrent(date, now) && bookedDates.has(date)));
+            setSelectedDates(nextDates);
+            setAvailabilityPeopleByDate(Object.fromEntries([...nextDates].map((date) => [date, availabilityPeopleByDate[date] ?? 1])));
             setError('');
           }} disabled={bookingsLoading || !!bookingsError} accessibilityRole="button"><Text style={styles.outlineChipText}>Clear all</Text></Pressable>
         </View>
-        <Text style={styles.helperText}>Tap future dates to mark them free. Your choices are saved to your profile.</Text>
+        <Text style={styles.helperText}>Tap an open date to choose solo or your ready group. Booked and expired dates are locked.</Text>
       </>}
 
       {screen === 'home' && <>
@@ -556,8 +708,11 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
               const booked = bookedDates.has(key);
               const today = key === dateKey(now);
               const available = selectedDates.has(key) && (!today || canSetSameDayAvailability(now)) && !booked;
-              const disabled = saving || bookingsLoading || !!bookingsError || booked || (today && !canSetSameDayAvailability(now));
-              const status = booked ? 'Booked' : available ? 'Free' : 'Off';
+              const capacity = availabilityCapacity(key);
+              const disabled = saving || bookingsLoading || !!bookingsError || groupLoading || booked || (today && !canSetSameDayAvailability(now));
+              const status = booked ? 'Booked'
+                : available ? groupLoading ? '…' : groupError ? 'Unavailable' : `${capacity} free`
+                  : 'Off';
               return <Pressable
                 key={key}
                 style={[
@@ -567,10 +722,10 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
                   today && styles.weekDayToday,
                   disabled && !booked && styles.weekDayDisabled,
                 ]}
-                onPress={() => { void toggleWeekday(date); }}
+                onPress={() => toggleWeekday(date)}
                 disabled={disabled}
                 accessibilityRole="button"
-                accessibilityLabel={`${today ? 'Today' : date.toLocaleDateString('en-IN', { weekday: 'long' })} ${date.getDate()}, ${status}${disabled ? '' : ', tap to change'}`}
+                accessibilityLabel={`${today ? 'Today' : date.toLocaleDateString('en-IN', { weekday: 'long' })} ${date.getDate()}, ${available ? `${capacity} ${capacity === 1 ? 'person' : 'people'} free` : status}${disabled ? '' : ', tap to choose who is available'}`}
                 accessibilityState={{ selected: available, disabled }}
               >
                 <Text style={[styles.weekDayName, available && styles.weekDayTextAvailable, booked && styles.weekDayTextBooked]}>
@@ -582,8 +737,8 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
             })}
           </View>
           <View style={styles.weeklyFooter}>
-            <Text style={styles.cardText}>Choose your free days here.</Text>
-            <Pressable onPress={() => setScreen('availability')} accessibilityRole="button" accessibilityLabel="Open full availability calendar">
+            <Text style={styles.cardText}>{groupLoading ? 'Loading group size…' : groupError ? 'Group size unavailable' : 'Choose solo or your ready group for each date.'}</Text>
+            <Pressable onPress={() => navigateScreen('availability')} accessibilityRole="button" accessibilityLabel="Open full availability calendar">
               <Text style={styles.calendarLink}>Full calendar</Text>
             </Pressable>
           </View>
@@ -606,14 +761,6 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
             <ShiftOption label="Full day" detail="Morning to evening" selected={profile.labourShift === 'full_day'} disabled={saving} onPress={() => { void updateShift('full_day'); }} />
           </View>
         </View>
-        <Text style={styles.sectionTitle}>Your work profile</Text>
-        <Pressable style={styles.infoCard} onPress={() => setScreen('profile')} accessibilityRole="button">
-          <View style={styles.availabilityCopy}>
-            <Text style={styles.cardHeading}>{profile.firstName} {profile.lastName}</Text>
-            <Text style={styles.cardText}>{profile.labourArea} · {profile.labourSkills.join(' · ')}</Text>
-          </View>
-          <Icon name="chevron-forward" color={colors.muted} />
-        </Pressable>
         <Pressable style={styles.infoCard} onPress={onOpenGroup} accessibilityRole="button">
           <Icon name="people-outline" color={colors.primary} size={25} />
           <View style={styles.availabilityCopy}>
@@ -625,36 +772,112 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
       </>}
 
       {screen === 'profile' && <>
-        <View style={styles.profileHero}>
-          <View style={styles.profileAvatar}><Text style={styles.profileAvatarText}>{profile.firstName.charAt(0).toUpperCase() || 'F'}</Text></View>
-          <Text style={styles.profileName}>{`${profile.firstName} ${profile.lastName}`.trim()}</Text>
-          <View style={styles.roleBadge}><Text style={styles.roleBadgeText}>LABOUR</Text></View>
-          <Text style={styles.profileMeta}>{profile.labourArea}</Text>
-        </View>
-        <View style={styles.infoCard}>
-          <View style={styles.profileRow}><Text style={styles.cardText}>Mobile</Text><Text style={styles.profileValue}>{profile.phone}</Text></View>
-          <View style={styles.rowDivider} />
-          <View style={styles.profileRow}><Text style={styles.cardText}>Daily rate</Text><Text style={styles.profileValue}>{profile.labourDailyRate ? `₹${profile.labourDailyRate}` : 'Not set'}</Text></View>
-          <View style={styles.rowDivider} />
-          <View style={styles.profileRow}><Text style={styles.cardText}>Travel radius</Text><Text style={styles.profileValue}>{profile.labourTravelRadius ? `${profile.labourTravelRadius} km` : 'Not set'}</Text></View>
-          <View style={styles.rowDivider} />
-          <View style={styles.profileRow}><Text style={styles.cardText}>Available today</Text>          <Text style={styles.profileValue}>{todayAvailable ? 'Yes' : 'No'}</Text></View>
-        </View>
-        <View style={styles.infoCard}>
-          <View style={styles.availabilityCopy}>
-            <Text style={styles.cardHeading}>Work skills</Text>
-            <View style={styles.chipRow}>{profile.labourSkills.map((skill) => <Text key={skill} style={styles.skillChip}>{skill}</Text>)}</View>
+        <View style={styles.workerHeroCard}>
+          <Pressable style={styles.workerAvatarPressable} onPress={() => { void chooseProfileImage(); }} disabled={profileImageSaving} accessibilityRole="button" accessibilityLabel="Change profile photo">
+            <LinearGradient colors={['#2563EB', '#60A5FA', '#4F46E5']} style={styles.workerAvatarGradient}>
+              <View style={styles.workerAvatarInner}>
+                {profile.profileImageUrl
+                  ? <Image source={{ uri: profile.profileImageUrl }} style={styles.workerAvatarImage} />
+                  : <Text style={styles.workerAvatarText}>{profile.firstName.charAt(0).toUpperCase() || 'F'}</Text>}
+              </View>
+            </LinearGradient>
+            <View style={styles.workerCameraBadge}>
+              {profileImageSaving ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Icon name="camera-outline" size={14} color="#FFFFFF" />}
+            </View>
+          </Pressable>
+          <View style={styles.workerIdentity}>
+            <Text style={styles.profileName} numberOfLines={1}>{`${profile.firstName} ${profile.lastName}`.trim()}</Text>
+            <View style={styles.roleBadge}><Text style={styles.roleBadgeText}>LABOUR</Text></View>
+          </View>
+          <View style={styles.profileMetricRow}>
+            <View style={styles.profileMetric}><Text style={styles.profileMetricValue}>{selectedDates.size}</Text><Text style={styles.profileMetricLabel}>available days</Text></View>
+            <View style={styles.metricDot} />
+            <View style={styles.profileMetric}><Text style={styles.profileMetricValue}>{profile.labourSkills.length}</Text><Text style={styles.profileMetricLabel}>skills</Text></View>
+            <View style={styles.metricDot} />
+            <View style={styles.profileMetric}><Text style={styles.profileMetricValue}>{groupLoading || groupError ? '—' : groupCapacity}</Text><Text style={styles.profileMetricLabel}>group size</Text></View>
           </View>
         </View>
-        <Pressable style={styles.secondaryButton} onPress={() => { setSkills(profile.labourSkills); setScreen('skills'); }} accessibilityRole="button">
-          <Icon name="pencil-outline" size={18} color={colors.primary} />
-          <Text style={styles.secondaryButtonText}>Edit skills</Text>
+
+        <View style={styles.profileSectionCard}>
+          <View style={styles.sectionHeadingRow}>
+            <Text style={styles.profileSectionTitle}>WORK CREDENTIALS</Text>
+            <Icon name="checkmark-done-circle-outline" size={20} color={colors.primary} />
+          </View>
+          <View style={styles.credentialRow}>
+            <View style={styles.credentialIcon}><Icon name="phone-portrait-outline" size={18} /></View>
+            <View style={styles.credentialCopy}><Text style={styles.credentialLabel}>Mobile Phone</Text><Text style={styles.credentialValue}>{profile.phone}</Text></View>
+            <View style={styles.verifiedTag}><Icon name="checkmark-circle-outline" size={13} color={colors.text} /><Text style={styles.verifiedTagText}>VERIFIED</Text></View>
+          </View>
+          <Pressable style={styles.credentialRow} onPress={() => navigateScreen('setup')} accessibilityRole="button" accessibilityLabel="Edit daily rate">
+            <View style={styles.credentialIcon}><Icon name="cash-outline" size={18} /></View>
+            <View style={styles.credentialCopy}>
+              <Text style={styles.credentialLabel}>Daily Rate</Text>
+              <Text style={styles.credentialValue}>{profile.labourDailyRate !== null ? `₹${profile.labourDailyRate} / day` : 'Set your daily rate'}</Text>
+            </View>
+            <Icon name="pencil-outline" size={18} color={colors.primary} />
+          </Pressable>
+          <View style={styles.profileLocationGrid}>
+            <Pressable style={styles.profileLocationCard} onPress={() => navigateScreen('setup')} accessibilityRole="button" accessibilityLabel="Edit village">
+              <View style={styles.locationLabelRow}><Icon name="location-outline" size={16} color={colors.primary} /><Text style={styles.locationLabel}>Village</Text></View>
+              <Text style={styles.locationValue} numberOfLines={1}>{profile.labourArea || 'Add village'}</Text>
+            </Pressable>
+            <Pressable style={styles.profileLocationCard} onPress={() => navigateScreen('setup')} accessibilityRole="button" accessibilityLabel="Edit travel radius">
+              <View style={styles.locationLabelRow}><Icon name="navigate-outline" size={16} color={colors.primary} /><Text style={styles.locationLabel}>Radius</Text><Icon name="search-outline" size={13} color={colors.muted} /></View>
+              <Text style={styles.locationValue}>{profile.labourTravelRadius !== null ? `${profile.labourTravelRadius} km` : 'Not set'}</Text>
+            </Pressable>
+          </View>
+          <View style={styles.availabilityStatusRow}>
+            <View style={[styles.availabilityDot, selectedDates.size > 0 && styles.availabilityDotOn]} />
+            <Text style={styles.availabilityStatusText}>{selectedDates.size > 0 ? `${selectedDates.size} upcoming days marked available` : 'No upcoming days marked available'}</Text>
+          </View>
+        </View>
+
+        <View style={styles.profileSectionCard}>
+          <View style={styles.sectionHeadingRow}>
+            <Text style={styles.profileSectionTitle}>SKILLS &amp; EXPERTISE</Text>
+            <Pressable onPress={() => { setSkills(profile.labourSkills); navigateScreen('skills'); }} accessibilityRole="button">
+              <Text style={styles.addSkillText}>+ Add Skill</Text>
+            </Pressable>
+          </View>
+          {profile.labourSkills.length
+            ? <View style={styles.profileSkillList}>{profile.labourSkills.map((skill) => <View key={skill} style={styles.profileSkillChip}>
+              <Icon name="leaf-outline" size={15} color={colors.primary} />
+              <Text style={styles.profileSkillText}>{skill}</Text>
+            </View>)}</View>
+            : <Text style={styles.profileSectionHint}>Add skills so farmers can find you for suitable work.</Text>}
+        </View>
+
+        <View style={styles.profileSectionCard}>
+          <View style={styles.groupHeader}>
+            <View style={styles.groupTitleRow}>
+              <Text style={styles.groupTitle}>{groupLoading ? 'Loading group…' : `Group of ${groupCapacity}`}</Text>
+              <Text style={styles.groupOptional}>OPTIONAL</Text>
+            </View>
+            <View style={styles.groupIcon}><Icon name="people-outline" size={18} color={colors.primary} /></View>
+          </View>
+          <Text style={styles.groupNames}>
+            {groupError
+              ? `Could not load group details: ${groupError}`
+              : groupMemberNames.length
+                ? groupMemberNames.join(', ')
+                : 'Work on your own or add trusted people to your group.'}
+          </Text>
+          <Pressable style={styles.manageGroupButton} onPress={onOpenGroup} accessibilityRole="button">
+            <Icon name="people-outline" size={18} color={colors.primary} />
+            <Text style={styles.manageGroupText}>Manage group</Text>
+          </Pressable>
+        </View>
+
+        <Pressable style={styles.languageRow} onPress={() => setLanguagePickerOpen(true)} accessibilityRole="button" accessibilityLabel="Change preferred language">
+          <View style={styles.languageIcon}><Icon name="language-outline" size={20} color={colors.primary} /></View>
+          <View style={styles.languageCopy}>
+            <Text style={styles.languageLabel}>Preferred Language</Text>
+            <Text style={styles.languageValue}>{profile.preferredLanguage === 'en' ? 'English' : 'Telugu'}</Text>
+          </View>
+          <Icon name="chevron-forward" size={19} color={colors.muted} />
         </Pressable>
-        <Pressable style={styles.secondaryButton} onPress={() => setScreen('setup')} accessibilityRole="button">
-          <Icon name="create-outline" size={18} color={colors.primary} />
-          <Text style={styles.secondaryButtonText}>Edit work profile</Text>
-        </Pressable>
-        <Pressable style={styles.secondaryButton} onPress={() => setConfirmSignOut(true)} disabled={signingOut} accessibilityRole="button">
+
+        <Pressable style={styles.logoutButton} onPress={() => setConfirmSignOut(true)} disabled={signingOut} accessibilityRole="button">
           <Icon name="log-out-outline" size={18} color={colors.danger} />
           <Text style={styles.signOutText}>{signingOut ? 'Signing out…' : 'Log out'}</Text>
         </Pressable>
@@ -673,11 +896,52 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
       <PrimaryButton label={saving ? 'Saving…' : 'Save availability'} onPress={() => { void saveAvailability(); }} disabled={saving || bookingsLoading || !!bookingsError} />
     </View>}
     {screen !== 'setup' && <View style={styles.tabBar} accessibilityRole="tablist">
-      <TabButton label="Home" icon="home-outline" selected={screen === 'home'} onPress={() => setScreen('home')} />
+      <TabButton label="Home" icon="home-outline" selected={screen === 'home'} onPress={goHome} />
       <TabButton label="Requests" icon="notifications-outline" selected={false} badgeCount={newRequestCount} onPress={onOpenRequests} />
-      <TabButton label="Availability" icon="calendar-outline" selected={screen === 'availability'} onPress={() => setScreen('availability')} />
-      <TabButton label="Profile" icon="person-outline" selected={screen === 'profile'} onPress={() => setScreen('profile')} />
+      <TabButton label="Profile" icon="person-outline" selected={screen === 'profile'} onPress={() => navigateScreen('profile')} />
     </View>}
+    <Modal visible={availabilityChoiceDate !== null} transparent animationType="slide" onRequestClose={() => setAvailabilityChoiceDate(null)}>
+      <View style={styles.modalBackdrop}>
+        <View style={styles.availabilityChoiceSheet}>
+          <Text style={styles.confirmTitle}>Who’s available?</Text>
+          {!!availabilityChoiceDate && <Text style={styles.confirmCopy}>
+            {new Date(`${availabilityChoiceDate}T00:00:00`).toLocaleDateString('en-IN', { dateStyle: 'full' })}
+          </Text>}
+          <Pressable style={styles.availabilityChoice} onPress={() => chooseAvailability(1)} accessibilityRole="button">
+            <Text style={styles.availabilityChoiceTitle}>Just me — 1 person</Text>
+            <Text style={styles.availabilityChoiceCopy}>Only you will be available on this date.</Text>
+          </Pressable>
+          {groupCapacity > 1 && <Pressable style={styles.availabilityChoice} onPress={() => chooseAvailability(groupCapacity)} accessibilityRole="button">
+            <Text style={styles.availabilityChoiceTitle}>My ready group — {groupCapacity} people</Text>
+            <Text style={styles.availabilityChoiceCopy}>You and the members marked ready to work.</Text>
+          </Pressable>}
+          {!!availabilityChoiceDate && selectedDates.has(availabilityChoiceDate) && <Pressable style={styles.unavailableChoice} onPress={() => chooseAvailability(null)} accessibilityRole="button">
+            <Text style={styles.unavailableChoiceText}>Mark unavailable</Text>
+          </Pressable>}
+          <Pressable style={styles.confirmCancel} onPress={() => setAvailabilityChoiceDate(null)} accessibilityRole="button">
+            <Text style={styles.confirmCancelText}>Cancel</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
+    <Modal visible={languagePickerOpen} transparent animationType="fade" onRequestClose={() => setLanguagePickerOpen(false)}>
+      <View style={styles.modalBackdrop}>
+        <View style={styles.confirmCard}>
+          <Text style={styles.confirmTitle}>Preferred language</Text>
+          <Pressable style={styles.languageOption} onPress={() => { void savePreferredLanguage('en'); }} disabled={saving} accessibilityRole="radio" accessibilityState={{ selected: profile.preferredLanguage === 'en' }}>
+            <Text style={styles.languageOptionText}>English</Text>
+            {profile.preferredLanguage === 'en' && <Icon name="checkmark-circle" size={19} color={colors.primary} />}
+          </Pressable>
+          <View style={[styles.languageOption, styles.languageOptionDisabled]}>
+            <View><Text style={styles.languageOptionText}>Telugu</Text><Text style={styles.languageComingSoon}>Coming soon</Text></View>
+            {profile.preferredLanguage === 'te' && <Icon name="checkmark-circle" size={19} color={colors.primary} />}
+          </View>
+          <Pressable style={styles.confirmCancel} onPress={() => setLanguagePickerOpen(false)} accessibilityRole="button">
+            <Text style={styles.confirmCancelText}>Close</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
     <Modal visible={confirmSignOut} transparent animationType="fade" onRequestClose={() => setConfirmSignOut(false)}>
       <View style={styles.modalBackdrop}>
         <View style={styles.confirmCard}>
@@ -781,9 +1045,23 @@ function ShiftOption({ label, detail, selected, disabled, onPress }: {
 }
 
 const styles = StyleSheet.create({
-  page: { flex: 1, backgroundColor: 'transparent' },
+  page: { flex: 1, backgroundColor: colors.screenTop },
   content: { width: '100%', maxWidth: 760, alignSelf: 'center', paddingHorizontal: 20, paddingTop: 22, paddingBottom: 24 },
+  profileContent: { maxWidth: 480, paddingHorizontal: 16, paddingTop: 7, paddingBottom: 20 },
+  profileAppHeader: { minHeight: 66, flexDirection: 'row', alignItems: 'center', gap: 9, paddingHorizontal: 18, borderBottomWidth: 1, borderBottomColor: colors.border, backgroundColor: colors.surface },
+  profileBrand: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 9 },
+  profileBrandIcon: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 13, borderWidth: 1, borderColor: '#DBEAFE', backgroundColor: colors.primarySoft },
+  profileBrandName: { color: colors.text, fontSize: 14, fontWeight: '800' },
+  profileBrandSubtitle: { color: '#94A3B8', fontSize: 10, marginTop: 1 },
+  profileNotification: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 20, borderWidth: 1, borderColor: '#F1F5F9', backgroundColor: colors.screenTop },
+  profileHeaderAvatar: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center', borderRadius: 20, borderWidth: 1.5, borderColor: colors.primary, backgroundColor: colors.surface },
+  profileHeaderAvatarImage: { width: 35, height: 35, borderRadius: 18 },
+  profileHeaderAvatarText: { color: colors.primary, fontSize: 11, fontWeight: '700' },
+  profileHeadingRow: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
+  profileHeaderButton: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 15, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
+  profilePageHeading: { flex: 1, color: colors.text, fontSize: 16, fontWeight: '600', textAlign: 'center' },
   headingRow: { minHeight: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 },
+  profileBackButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', marginRight: 12, borderWidth: 1, borderColor: colors.border, borderRadius: 22, backgroundColor: colors.surface },
   headingCopy: { flex: 1 },
   heading: { color: colors.text, fontSize: 32, lineHeight: 39, fontWeight: '800', letterSpacing: -0.8 },
   headingAccent: { color: '#3477F6' },
@@ -852,10 +1130,6 @@ const styles = StyleSheet.create({
   availabilityCopy: { flex: 1, gap: 5 },
   cardHeading: { color: colors.text, fontSize: 18, lineHeight: 24, fontWeight: '700' },
   cardText: { color: colors.muted, fontSize: 15, lineHeight: 21 },
-  switchTrack: { width: 64, height: 38, borderRadius: 20, alignItems: 'flex-start', justifyContent: 'center', padding: 4, backgroundColor: '#CBD5E1' },
-  switchTrackOn: { alignItems: 'flex-end', backgroundColor: colors.primary },
-  switchThumb: { width: 30, height: 30, borderRadius: 15, backgroundColor: '#FFFFFF' },
-  switchThumbOn: { backgroundColor: '#FFFFFF' },
   sectionTitle: { color: colors.text, fontSize: 21, fontWeight: '700', marginTop: 8, marginBottom: 12 },
   emptyCard: { alignItems: 'center', gap: 9, padding: 24, borderWidth: 1, borderColor: colors.border, borderRadius: 22, backgroundColor: colors.surface },
   errorText: { color: colors.danger, fontSize: 14, lineHeight: 20, marginVertical: 12 },
@@ -865,12 +1139,12 @@ const styles = StyleSheet.create({
   monthButton: { width: 42, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 21, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
   calendarGrid: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 22 },
   weekday: { width: `${100 / 7}%`, height: 36, textAlign: 'center', color: colors.muted, fontSize: 14, fontWeight: '700' },
-  calendarCell: { width: `${100 / 7}%`, minHeight: 48, alignItems: 'center', justifyContent: 'center', borderRadius: 24 },
+  calendarCell: { width: `${100 / 7}%`, minHeight: 56, alignItems: 'center', justifyContent: 'center', borderRadius: 24 },
   calendarDayAvailable: { backgroundColor: colors.primary },
   calendarDayBooked: { backgroundColor: colors.warningSoft, borderWidth: 1, borderColor: '#FDE68A' },
-  calendarDayActive: { borderWidth: 2, borderColor: colors.text },
   calendarDayPast: { opacity: 0.4 },
   calendarDayText: { color: colors.text, fontSize: 16, fontWeight: '500' },
+  calendarDayCapacity: { color: colors.primary, fontSize: 8, lineHeight: 10, fontWeight: '700' },
   calendarDayTextAvailable: { color: '#FFFFFF', fontWeight: '700' },
   calendarDayTextBooked: { color: colors.warning, fontWeight: '700' },
   calendarDayTextPast: { color: colors.muted },
@@ -882,17 +1156,74 @@ const styles = StyleSheet.create({
   quickActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 14 },
   outlineChip: { minHeight: 44, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 16, borderRadius: 23, borderWidth: 1, borderColor: '#CBD5E1' },
   outlineChipText: { color: colors.text, fontSize: 14, fontWeight: '600' },
-  profileHero: { alignItems: 'center', marginBottom: 24 },
-  profileAvatar: { width: 112, height: 112, borderRadius: 56, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.surfaceMuted, marginBottom: 14 },
-  profileAvatarText: { color: colors.text, fontSize: 46, fontWeight: '700' },
-  profileName: { color: colors.text, fontSize: 27, fontWeight: '800', textAlign: 'center' },
-  roleBadge: { backgroundColor: colors.successSoft, paddingHorizontal: 13, paddingVertical: 6, borderRadius: 10, marginTop: 8 },
-  roleBadgeText: { color: colors.success, fontSize: 13, fontWeight: '800' },
-  profileMeta: { color: colors.muted, fontSize: 16, marginTop: 9 },
+  workerHeroCard: { alignItems: 'center', padding: 18, marginBottom: 14, borderRadius: 24, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, shadowColor: colors.primary, shadowOpacity: 0.06, shadowRadius: 16, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
+  workerAvatarPressable: { width: 104, height: 104, position: 'relative', marginBottom: 12 },
+  workerAvatarGradient: { width: 104, height: 104, alignItems: 'center', justifyContent: 'center', padding: 4, borderRadius: 52, shadowColor: colors.primary, shadowOpacity: 0.2, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 4 },
+  workerAvatarInner: { width: 96, height: 96, alignItems: 'center', justifyContent: 'center', overflow: 'hidden', borderRadius: 48, borderWidth: 3, borderColor: colors.surface, backgroundColor: colors.primarySoft },
+  workerAvatarImage: { width: '100%', height: '100%' },
+  workerAvatarText: { color: colors.primary, fontSize: 34, fontWeight: '800' },
+  workerCameraBadge: { position: 'absolute', right: 2, bottom: 1, width: 27, height: 27, alignItems: 'center', justifyContent: 'center', borderRadius: 14, borderWidth: 2, borderColor: colors.surface, backgroundColor: colors.primary },
+  workerIdentity: { width: '100%', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9 },
+  profileName: { maxWidth: '75%', color: colors.text, fontSize: 21, fontWeight: '700', textAlign: 'center' },
+  roleBadge: { backgroundColor: colors.primarySoft, borderWidth: 1, borderColor: '#DBEAFE', paddingHorizontal: 11, paddingVertical: 4, borderRadius: 13 },
+  roleBadgeText: { color: colors.primary, fontSize: 10, fontWeight: '700', letterSpacing: 0.6 },
+  profileMetricRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 13, marginTop: 12 },
+  profileMetric: { alignItems: 'center' },
+  profileMetricValue: { color: colors.primary, fontSize: 15, fontWeight: '800' },
+  profileMetricLabel: { color: colors.muted, fontSize: 9, marginTop: 1 },
+  metricDot: { width: 4, height: 4, borderRadius: 2, backgroundColor: '#CBD5E1' },
+  profileSectionCard: { padding: 16, marginBottom: 14, borderWidth: 1, borderColor: colors.border, borderRadius: 22, backgroundColor: colors.surface, shadowColor: colors.text, shadowOpacity: 0.025, shadowRadius: 10, shadowOffset: { width: 0, height: 2 }, elevation: 1 },
+  sectionHeadingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 12 },
+  profileSectionTitle: { color: '#64748B', fontSize: 12, fontWeight: '600', letterSpacing: 0.8 },
+  credentialRow: { minHeight: 62, flexDirection: 'row', alignItems: 'center', gap: 11, padding: 10, marginBottom: 8, borderRadius: 15, backgroundColor: colors.screenTop },
+  credentialIcon: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', borderRadius: 11, backgroundColor: colors.surface },
+  credentialCopy: { flex: 1, minWidth: 0 },
+  credentialLabel: { color: colors.muted, fontSize: 11 },
+  credentialValue: { color: colors.text, fontSize: 13, fontWeight: '700', marginTop: 2 },
+  verifiedTag: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, paddingVertical: 5, borderRadius: 13, borderWidth: 1, borderColor: '#BFDBFE', backgroundColor: colors.primarySoft },
+  verifiedTagText: { color: colors.primary, fontSize: 8, fontWeight: '700' },
+  profileLocationGrid: { flexDirection: 'row', gap: 9, marginTop: 2 },
+  profileLocationCard: { flex: 1, minWidth: 0, minHeight: 74, justifyContent: 'center', padding: 11, borderRadius: 15, backgroundColor: colors.screenTop },
+  locationLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 5, marginBottom: 6 },
+  locationLabel: { flex: 1, color: colors.muted, fontSize: 11 },
+  locationValue: { color: colors.text, fontSize: 13, fontWeight: '700' },
+  availabilityStatusRow: { flexDirection: 'row', alignItems: 'center', gap: 7, marginTop: 10, paddingHorizontal: 2 },
+  availabilityDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.border },
+  availabilityDotOn: { backgroundColor: colors.success },
+  availabilityStatusText: { color: colors.muted, fontSize: 10 },
+  addSkillText: { color: colors.primary, fontSize: 12, fontWeight: '600' },
+  profileSkillList: { flexDirection: 'row', flexWrap: 'wrap', gap: 9 },
+  profileSkillChip: { minHeight: 38, flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 20, backgroundColor: colors.screenTop },
+  profileSkillText: { color: colors.text, fontSize: 12, fontWeight: '500' },
+  profileSectionHint: { color: colors.muted, fontSize: 12, lineHeight: 18 },
+  groupHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 5 },
+  groupTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 9 },
+  groupTitle: { color: colors.text, fontSize: 16, fontWeight: '600' },
+  groupOptional: { color: colors.muted, fontSize: 10, fontWeight: '600', paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, backgroundColor: colors.surfaceMuted },
+  groupIcon: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center', borderRadius: 16, backgroundColor: colors.primarySoft },
+  groupNames: { color: colors.muted, fontSize: 12, lineHeight: 19, marginVertical: 8 },
+  manageGroupButton: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 14, backgroundColor: colors.primarySoft },
+  manageGroupText: { color: colors.primary, fontSize: 13, fontWeight: '600' },
+  languageRow: { minHeight: 70, flexDirection: 'row', alignItems: 'center', gap: 11, padding: 12, marginBottom: 14, borderWidth: 1, borderColor: colors.border, borderRadius: 19, backgroundColor: colors.surface },
+  languageIcon: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 14, backgroundColor: colors.primarySoft },
+  languageCopy: { flex: 1 },
+  languageLabel: { color: colors.muted, fontSize: 11 },
+  languageValue: { color: colors.text, fontSize: 13, fontWeight: '600', marginTop: 2 },
+  languageOption: { minHeight: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12, marginTop: 10, borderWidth: 1, borderColor: colors.border, borderRadius: 13 },
+  languageOptionText: { color: colors.text, fontSize: 14, fontWeight: '600' },
+  languageOptionDisabled: { opacity: 0.55 },
+  languageComingSoon: { color: colors.muted, fontSize: 10, marginTop: 2 },
+  logoutButton: { minHeight: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: 16, borderWidth: 1, borderColor: '#FECDD3', borderRadius: 16, backgroundColor: colors.surface },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(20, 32, 23, 0.48)', justifyContent: 'center', padding: 22 },
   confirmCard: { width: '100%', maxWidth: 420, alignSelf: 'center', backgroundColor: colors.surface, borderRadius: 18, padding: 20 },
   confirmTitle: { color: colors.text, fontSize: 20, fontWeight: '800' },
   confirmCopy: { color: colors.muted, fontSize: 14, lineHeight: 20, marginTop: 8 },
+  availabilityChoiceSheet: { width: '100%', maxWidth: 480, padding: 22, borderRadius: 24, backgroundColor: colors.surface },
+  availabilityChoice: { minHeight: 70, justifyContent: 'center', paddingHorizontal: 15, paddingVertical: 11, marginTop: 12, borderWidth: 1, borderColor: colors.border, borderRadius: 16, backgroundColor: colors.surface },
+  availabilityChoiceTitle: { color: colors.text, fontSize: 16, fontWeight: '700' },
+  availabilityChoiceCopy: { color: colors.muted, fontSize: 13, lineHeight: 18, marginTop: 4 },
+  unavailableChoice: { minHeight: 48, justifyContent: 'center', alignItems: 'center', marginTop: 12, borderRadius: 14, backgroundColor: '#FEF2F2' },
+  unavailableChoiceText: { color: colors.danger, fontSize: 14, fontWeight: '700' },
   confirmActions: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: 8, marginTop: 18 },
   confirmCancel: { minHeight: 40, paddingHorizontal: 13, justifyContent: 'center', borderRadius: 9 },
   confirmCancelText: { color: colors.muted, fontSize: 12, fontWeight: '700' },

@@ -8,6 +8,8 @@ import { colors } from '../theme';
 
 type Props = {
   farmerId: string;
+  onAlertsViewed: (alerts: FarmerAlert[]) => Promise<void>;
+  onBack: () => void;
   onFindWorkers: (alert?: FarmerAlert) => void;
   onOpenBookings: (bucket?: BookingBucket) => void;
   onOpenProfile: () => void;
@@ -37,7 +39,7 @@ function alertTone(type: FarmerAlert['type']): { background: string; foreground:
   return { background: colors.warningSoft, foreground: colors.warning };
 }
 
-export default function AlertsScreen({ farmerId, onFindWorkers, onOpenBookings, onOpenProfile }: Props) {
+export default function AlertsScreen({ farmerId, onAlertsViewed, onBack, onFindWorkers, onOpenBookings, onOpenProfile }: Props) {
   const [alerts, setAlerts] = useState<FarmerAlert[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -46,7 +48,9 @@ export default function AlertsScreen({ farmerId, onFindWorkers, onOpenBookings, 
     setLoading(true);
     setError('');
     try {
-      setAlerts(await fetchFarmerAlerts(farmerId));
+      const nextAlerts = await fetchFarmerAlerts(farmerId);
+      await onAlertsViewed(nextAlerts);
+      setAlerts(nextAlerts);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Could not load alerts.');
     } finally {
@@ -56,7 +60,7 @@ export default function AlertsScreen({ farmerId, onFindWorkers, onOpenBookings, 
 
   useEffect(() => {
     void loadAlerts();
-  }, [farmerId]);
+  }, [farmerId, onAlertsViewed]);
 
   function openAlert(alert: FarmerAlert) {
     if (alert.type === 'availability') onFindWorkers(alert);
@@ -66,7 +70,10 @@ export default function AlertsScreen({ farmerId, onFindWorkers, onOpenBookings, 
 
   return <View style={styles.page}>
     <View style={styles.header}>
-      <View><Text style={styles.heading}>Alerts</Text><Text style={styles.subtitle}>ముఖ్యమైన సమాచారం</Text></View>
+      <Pressable style={styles.backButton} onPress={onBack} accessibilityRole="button" accessibilityLabel="Back to previous screen">
+        <Ionicons name="chevron-back" size={22} color={colors.primary} />
+      </Pressable>
+      <View style={styles.headerCopy}><Text style={styles.heading}>Alerts</Text><Text style={styles.subtitle}>ముఖ్యమైన సమాచారం</Text></View>
       <Pressable style={styles.refreshButton} onPress={() => { void loadAlerts(); }} disabled={loading} accessibilityRole="button" accessibilityLabel="Refresh alerts">
         <Ionicons name="refresh-outline" size={21} color={colors.primary} />
       </Pressable>
@@ -118,7 +125,9 @@ export default function AlertsScreen({ farmerId, onFindWorkers, onOpenBookings, 
 
 const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: 'transparent' },
-  header: { minHeight: 88, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20 },
+  header: { minHeight: 88, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 20 },
+  backButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 22, backgroundColor: colors.surfaceMuted },
+  headerCopy: { flex: 1 },
   heading: { color: colors.primary, fontSize: 30, fontWeight: '800' },
   subtitle: { color: colors.muted, fontSize: 14, marginTop: 2 },
   refreshButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 22, backgroundColor: colors.surfaceMuted },

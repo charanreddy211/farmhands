@@ -41,8 +41,12 @@ export type WorkerSearchResponse = {
   workers: WorkerProfile[];
   total: number;
   availableCount: number;
+  availablePeopleCount: number;
+  rangeCounts: Record<3 | 5 | 7 | 10 | 15 | 20, number>;
+  unlocatedCount: number;
+  availabilityByDate: Array<{ date: string; workerCount: number; peopleCount: number }>;
   bookedWorkerIds: string[];
-  suggestions: Array<{ date: string; workerCount: number }>;
+  suggestions: Array<{ date: string; workerCount: number; peopleCount: number }>;
   skills: string[];
 };
 

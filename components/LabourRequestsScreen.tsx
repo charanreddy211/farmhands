@@ -64,6 +64,11 @@ function countdown(expiresAt: string): string {
   return hours ? `Expires in ${hours} hours` : `Expires in ${minutes} minutes`;
 }
 
+function declineReasonLabel(reason: RequestDeclineReason | null): string | null {
+  if (!reason) return null;
+  return declineReasons.find((item) => item.value === reason)?.label ?? reason;
+}
+
 export default function LabourRequestsScreen({ workerId, onBackToHome, onOpenProfile }: Props) {
   const [bucket, setBucket] = useState<WorkerRequestBucket>('new');
   const [requests, setRequests] = useState<Record<WorkerRequestBucket, WorkerRequest[]>>({
@@ -74,6 +79,7 @@ export default function LabourRequestsScreen({ workerId, onBackToHome, onOpenPro
   const [selectedRequest, setSelectedRequest] = useState<WorkerRequest | null>(null);
   const [bookingDetails, setBookingDetails] = useState<BookingDetails | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
+  const [acceptOpen, setAcceptOpen] = useState(false);
   const [declineOpen, setDeclineOpen] = useState(false);
   const [declineReason, setDeclineReason] = useState<RequestDeclineReason | null>(null);
   const [cancelOpen, setCancelOpen] = useState(false);
@@ -161,6 +167,12 @@ export default function LabourRequestsScreen({ workerId, onBackToHome, onOpenPro
     }
   }
 
+  function beginAccept(request: WorkerRequest) {
+    setSelectedRequest(request);
+    setAcceptOpen(true);
+    setError('');
+  }
+
   async function submitResponse(status: 'accepted' | 'declined') {
     if (!selectedRequest || (status === 'declined' && !declineReason)) return;
     setResponding(true);
@@ -173,6 +185,7 @@ export default function LabourRequestsScreen({ workerId, onBackToHome, onOpenPro
         status === 'declined' ? declineReason ?? undefined : undefined,
       );
       setSelectedRequest(null);
+      setAcceptOpen(false);
       setDeclineOpen(false);
       setDeclineReason(null);
       setBucket(status === 'accepted' ? 'accepted' : 'past');
@@ -186,6 +199,7 @@ export default function LabourRequestsScreen({ workerId, onBackToHome, onOpenPro
 
   const activeRequests = requests[bucket];
   const detail = selectedRequest;
+  const acceptingPeopleCount = selectedRequest?.maxAcceptingPeople ?? 0;
 
   return <View style={styles.page}>
     <View style={styles.header}>
@@ -236,7 +250,7 @@ export default function LabourRequestsScreen({ workerId, onBackToHome, onOpenPro
         {bookingDetails?.farmer.phone && <DetailRow icon="call-outline" label="Farmer phone" value={bookingDetails.farmer.phone} />}
       </View>
       {detail.responseStatus === 'pending' && <View style={styles.detailActions}>
-        <PrimaryButton label={responding ? 'Saving…' : 'Accept'} onPress={() => { void submitResponse('accepted'); }} disabled={responding} />
+        <PrimaryButton label="Accept" onPress={() => beginAccept(detail)} disabled={responding} />
         <SecondaryButton label="Decline" onPress={() => { setDeclineReason(null); setDeclineOpen(true); }} disabled={responding} />
       </View>}
       {detail.responseStatus === 'accepted' && detail.bookingStatus === 'confirmed' && <View style={styles.detailActions}>
@@ -245,7 +259,7 @@ export default function LabourRequestsScreen({ workerId, onBackToHome, onOpenPro
         <SecondaryButton label="Cancel job" onPress={() => { setCancelReason(null); setCancelOpen(true); }} disabled={responding} />
       </View>}
       {detail.responseStatus === 'declined' && detail.declineReason && <Text style={styles.helperText}>
-        Reason: {declineReasons.find((reason) => reason.value === detail.declineReason)?.label ?? detail.declineReason}
+        Reason: {declineReasonLabel(detail.declineReason)}
       </Text>}
       {!!error && <Text style={styles.errorText} accessibilityRole="alert">{error}</Text>}
     </ScrollView> : <>
@@ -277,7 +291,7 @@ export default function LabourRequestsScreen({ workerId, onBackToHome, onOpenPro
             item={item}
             bucket={bucket}
             onOpen={() => { void openRequestDetails(item); }}
-            onAccept={() => { setSelectedRequest(item); setError(''); void respondToSelected(item); }}
+            onAccept={() => beginAccept(item)}
             onCall={() => { void callFarmer(item); }}
             onDecline={() => { setSelectedRequest(item); setDeclineReason(null); setDeclineOpen(true); setError(''); }}
             responding={responding}
@@ -302,6 +316,34 @@ export default function LabourRequestsScreen({ workerId, onBackToHome, onOpenPro
       </Pressable>
     </View>}
 
+    <Modal transparent animationType="slide" visible={acceptOpen} onRequestClose={() => setAcceptOpen(false)}>
+      <View style={styles.modalBackdrop}>
+        <View style={styles.modalSheet}>
+          <Text style={styles.modalTitle}>Confirm your availability</Text>
+          <Text style={styles.helperText}>
+            Your availability choice covers {acceptingPeopleCount} {acceptingPeopleCount === 1 ? 'person' : 'people'}. Accepting confirms that headcount.
+          </Text>
+          <Text style={styles.helperText}>
+            {selectedRequest?.maxAcceptingPeople
+              ? `The farmer requested ${selectedRequest.request.peopleNeeded} people.`
+              : 'No places remain on this request. Refresh your requests to check for updates.'}
+          </Text>
+          {!!error && <Text style={styles.errorText} accessibilityRole="alert">{error}</Text>}
+          <Pressable
+            style={[styles.primaryButton, (!selectedRequest?.maxAcceptingPeople || responding) && styles.buttonDisabled]}
+            onPress={() => { void submitResponse('accepted'); }}
+            disabled={!selectedRequest?.maxAcceptingPeople || responding}
+            accessibilityRole="button"
+          >
+            {responding && <ActivityIndicator color="#FFFFFF" />}
+            <Text style={styles.primaryButtonText}>{responding ? 'Saving…' : `Accept · ${acceptingPeopleCount} ${acceptingPeopleCount === 1 ? 'person' : 'people'}`}</Text>
+          </Pressable>
+          <Pressable style={styles.secondaryButton} onPress={() => setAcceptOpen(false)} accessibilityRole="button">
+            <Text style={styles.secondaryButtonText}>Go back</Text>
+          </Pressable>
+        </View>
+      </View>
+    </Modal>
     <Modal transparent animationType="slide" visible={declineOpen} onRequestClose={() => setDeclineOpen(false)}>
       <View style={styles.modalBackdrop}>
         <View style={styles.modalSheet}>
@@ -359,21 +401,6 @@ export default function LabourRequestsScreen({ workerId, onBackToHome, onOpenPro
     </Modal>
   </View>;
 
-  async function respondToSelected(item: WorkerRequest) {
-    if (responding) return;
-    setResponding(true);
-    setError('');
-    try {
-      await respondToRequest(item.request.id, workerId, 'accepted');
-      setSelectedRequest(null);
-      setBucket('accepted');
-      await loadRequests();
-    } catch (responseError) {
-      setError(responseError instanceof Error ? responseError.message : 'Could not save your response. Please try again.');
-    } finally {
-      setResponding(false);
-    }
-  }
 }
 
 function RequestCard({ item, bucket, onOpen, onAccept, onCall, onDecline, responding }: {
@@ -421,6 +448,9 @@ function RequestCard({ item, bucket, onOpen, onAccept, onCall, onDecline, respon
         {item.responseStatus === 'accepted' ? 'Accepted' : item.responseStatus === 'declined' ? 'Declined'
           : item.responseStatus === 'expired' ? 'Expired' : item.responseStatus === 'cancelled' ? 'Cancelled' : 'Request unavailable'}
       </Text>}
+    {item.responseStatus === 'declined' && declineReasonLabel(item.declineReason) && <Text style={styles.declineReasonText}>
+      Reason: {declineReasonLabel(item.declineReason)}
+    </Text>}
   </View>;
 }
 
@@ -484,11 +514,12 @@ const styles = StyleSheet.create({
   requestSummary: { color: colors.muted, fontSize: 16, lineHeight: 24, marginTop: 14, marginBottom: 14 },
   payText: { color: colors.text, fontWeight: '700' },
   actionRow: { flexDirection: 'row', gap: 12 },
-  acceptButton: { minHeight: 54, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 28, backgroundColor: colors.text },
+  acceptButton: { minHeight: 54, flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 28, backgroundColor: colors.primary },
   acceptButtonText: { color: '#FFFFFF', fontSize: 17, fontWeight: '700' },
   declineButton: { minHeight: 54, flex: 1, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.border, borderRadius: 28, backgroundColor: colors.surface },
   declineButtonText: { color: colors.text, fontSize: 17, fontWeight: '600' },
   responseLabel: { color: colors.muted, fontSize: 14, fontWeight: '600' },
+  declineReasonText: { color: colors.muted, fontSize: 14, lineHeight: 20, marginTop: 5 },
   helperText: { color: colors.muted, fontSize: 14, lineHeight: 20 },
   detailContent: { width: '100%', maxWidth: 760, alignSelf: 'center', gap: 18, padding: 20, paddingBottom: 32 },
   loadingRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
