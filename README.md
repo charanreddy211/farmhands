@@ -28,6 +28,8 @@ npm install
 npm run start:dev
 ```
 
+For production, set `NODE_ENV=production` and configure `DATABASE_URL` in the backend hosting service (for example, Render's environment settings) with your Neon PostgreSQL connection string. Use Neon’s pooled connection string with SSL enabled. The backend runs its TypeORM migrations on startup in production and requires `DATABASE_URL`; it will not fall back to a local database. Keep the connection string private, and rotate its password if it has been shared.
+
 Requests are stored in PostgreSQL and loaded from the API when the Home screen opens. For Expo Go on a physical device, set `EXPO_PUBLIC_API_URL` to the computer's LAN address (for example, `http://192.168.1.20:3000/api`) before starting Expo; `localhost` refers to the device itself.
 
 Home addresses use the device's current location and resolve its area name through Google Geocoding. Enable the Geocoding API and billing in Google Cloud, then configure `GOOGLE_MAPS_API_KEY` in the backend process environment. Keep this key on the server; do not use an `EXPO_PUBLIC_` variable for it. For example, in PowerShell, set `$env:GOOGLE_MAPS_API_KEY = "your-key"` in the backend terminal before running `npm run start:dev`.
