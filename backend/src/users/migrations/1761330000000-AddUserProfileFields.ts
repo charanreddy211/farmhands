@@ -4,13 +4,13 @@ export class AddUserProfileFields1761330000000 implements MigrationInterface {
   name = 'AddUserProfileFields1761330000000';
 
   async up(queryRunner: QueryRunner): Promise<void> {
-    await queryRunner.query(`ALTER TABLE "users" ADD "firstName" character varying(80) NOT NULL DEFAULT ''`);
-    await queryRunner.query(`ALTER TABLE "users" ADD "lastName" character varying(80) NOT NULL DEFAULT ''`);
-    await queryRunner.query(`ALTER TABLE "users" ADD "email" character varying(254)`);
-    await queryRunner.query(`ALTER TABLE "users" ADD "homeAddress" text NOT NULL DEFAULT ''`);
-    await queryRunner.query(`ALTER TABLE "users" ADD "profileImageUrl" text`);
-    await queryRunner.query(`ALTER TABLE "users" ADD "roles" text array NOT NULL DEFAULT '{}'`);
-    await queryRunner.query(`ALTER TABLE "users" ADD "farms" jsonb NOT NULL DEFAULT '[]'::jsonb`);
+    await queryRunner.query(`ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "firstName" character varying(80) NOT NULL DEFAULT ''`);
+    await queryRunner.query(`ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "lastName" character varying(80) NOT NULL DEFAULT ''`);
+    await queryRunner.query(`ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "email" character varying(254)`);
+    await queryRunner.query(`ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "homeAddress" text NOT NULL DEFAULT ''`);
+    await queryRunner.query(`ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "profileImageUrl" text`);
+    await queryRunner.query(`ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "roles" text array NOT NULL DEFAULT '{}'`);
+    await queryRunner.query(`ALTER TABLE "users" ADD COLUMN IF NOT EXISTS "farms" jsonb NOT NULL DEFAULT '[]'::jsonb`);
   }
 
   async down(queryRunner: QueryRunner): Promise<void> {
