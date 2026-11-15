@@ -5,7 +5,6 @@ import Text from './AppText';
 import AppTextInput from './AppTextInput';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
-import { autocompletePlaces, fetchPlaceDetails, PlacePrediction } from '../api/places';
 import { FarmLocation, updateProfile } from '../api/profile';
 import { fetchWorkers, saveWorkerSearchAlert, WorkerProfile, WorkerSearchParams, WorkerSearchResponse } from '../api/workers';
 import { colors } from '../theme';
@@ -139,9 +138,6 @@ export default function FindWorkersScreen({
   const [originFarmId, setOriginFarmId] = useState<string | null>(firstLocatedFarm?.id ?? null);
   const [pinFarmId, setPinFarmId] = useState<string | null>(null);
   const [originPickerOpen, setOriginPickerOpen] = useState(false);
-  const [originQuery, setOriginQuery] = useState('');
-  const [originPredictions, setOriginPredictions] = useState<PlacePrediction[]>([]);
-  const [originLoading, setOriginLoading] = useState(false);
   const [originError, setOriginError] = useState('');
   const [distanceStorageWarning, setDistanceStorageWarning] = useState('');
   const [locationLoading, setLocationLoading] = useState(false);
@@ -207,33 +203,10 @@ export default function FindWorkersScreen({
         }
       })
       .catch(() => {
-        if (active) setOriginError('Could not read your current location. Choose a farm or search for a village.');
+        if (active) setOriginError('Could not read your current location. Choose a farm with a saved GPS pin or allow location access.');
       });
     return () => { active = false; };
   }, [farms, location, originFarmId]);
-
-  useEffect(() => {
-    if (!originPickerOpen || originQuery.trim().length < 2) {
-      setOriginPredictions([]);
-      return;
-    }
-    const controller = new AbortController();
-    const timer = setTimeout(() => {
-      setOriginLoading(true);
-      autocompletePlaces(originQuery, controller.signal)
-        .then((predictions) => setOriginPredictions(predictions))
-        .catch((searchError) => {
-          if (!controller.signal.aborted) {
-            setOriginError(searchError instanceof Error ? searchError.message : 'Could not search for that village.');
-          }
-        })
-        .finally(() => { if (!controller.signal.aborted) setOriginLoading(false); });
-    }, 300);
-    return () => {
-      clearTimeout(timer);
-      controller.abort();
-    };
-  }, [originPickerOpen, originQuery]);
 
   const searchParams = useMemo(() => makeSearchParams({
     from, to, location, distance, rating, skill, query, farmerId, workedWithMe,
@@ -357,14 +330,18 @@ export default function FindWorkersScreen({
     try {
       const permission = await Location.requestForegroundPermissionsAsync();
       if (permission.status !== 'granted') {
-        setOriginError('Location access is off. Choose a saved farm or search for a village instead.');
+        setOriginError('Location access is off. Allow it to use GPS, or choose a farm with a saved GPS pin.');
         return false;
       }
       const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       const coordinates = { latitude: position.coords.latitude, longitude: position.coords.longitude };
       if (pinFarmId) {
         const updatedFarms = farms.map((farm) => farm.id === pinFarmId
-          ? { ...farm, ...coordinates }
+          ? {
+            ...farm,
+            ...coordinates,
+            mapLink: `https://www.google.com/maps/search/?api=1&query=${coordinates.latitude},${coordinates.longitude}`,
+          }
           : farm);
         const savedProfile = await updateProfile(farmerId, { farms: updatedFarms });
         onFarmsChange(savedProfile.farms);
@@ -416,39 +393,7 @@ export default function FindWorkersScreen({
     }
     setPinFarmId(farm.id);
     setLocation(null);
-    setOriginQuery(farm.address);
-    setOriginError('This farm needs a map pin. Search its village below, or stand at the farm and use your current location.');
-  }
-
-  async function chooseVillage(prediction: PlacePrediction) {
-    setOriginLoading(true);
-    setOriginError('');
-    try {
-      const place = await fetchPlaceDetails(prediction.placeId);
-      const coordinates = { latitude: place.latitude, longitude: place.longitude };
-      if (pinFarmId) {
-        const farm = farms.find((item) => item.id === pinFarmId);
-        if (!farm) throw new Error('The selected farm is no longer available.');
-        const updatedFarms = farms.map((item) => item.id === pinFarmId
-          ? { ...item, ...coordinates, mapLink: place.mapLink }
-          : item);
-        const savedProfile = await updateProfile(farmerId, { farms: updatedFarms });
-        onFarmsChange(savedProfile.farms);
-        setOriginLabel(farm.name);
-      } else {
-        setOriginFarmId(null);
-        setOriginLabel(place.address);
-      }
-      setLocation(coordinates);
-      setPinFarmId(null);
-      setOriginPickerOpen(false);
-      setOriginQuery('');
-      setOriginPredictions([]);
-    } catch (placeError) {
-      setOriginError(placeError instanceof Error ? placeError.message : 'Could not use that village as the search location.');
-    } finally {
-      setOriginLoading(false);
-    }
+    setOriginError('This farm has no GPS pin yet. Stand at the farm and use your current location to save one.');
   }
 
   function chooseCalendarDate(date: Date) {
@@ -688,7 +633,7 @@ export default function FindWorkersScreen({
           <Pressable style={styles.avatarButton} onPress={onOpenSavedWorkers} accessibilityRole="button" accessibilityLabel="Open My workers">
             <Icon name="bookmark-outline" size={21} color={colors.primary} />
           </Pressable>
-          <Pressable style={styles.avatarButton} onPress={() => { setOriginPickerOpen(true); setOriginError(''); }} accessibilityRole="button" accessibilityLabel={location ? `Search location: ${originLabel}` : 'Choose a farm, village, or current location'}>
+          <Pressable style={styles.avatarButton} onPress={() => { setOriginPickerOpen(true); setOriginError(''); }} accessibilityRole="button" accessibilityLabel={location ? `Search location: ${originLabel}` : 'Choose a farm or current GPS location'}>
             {locationLoading ? <ActivityIndicator color={colors.text} /> : <Icon name={location ? 'location' : 'locate-outline'} size={22} />}
           </Pressable>
         </View>
@@ -784,7 +729,7 @@ export default function FindWorkersScreen({
       {!location && !loading && <View style={styles.locationRequiredCard}>
         <View style={styles.emptyIcon}><Icon name="navigate-outline" size={30} color={colors.primary} /></View>
         <Text style={styles.emptyTitle}>Choose where to search from</Text>
-        <Text style={styles.emptyText}>Pick a farm, enter a village, or enable phone location. Distances are approximate and workers’ exact coordinates aren’t shown.</Text>
+        <Text style={styles.emptyText}>Choose a farm with a saved GPS pin or enable phone location. Distances are approximate and workers’ exact coordinates aren’t shown.</Text>
         <Pressable style={styles.notifyButton} onPress={() => { setOriginPickerOpen(true); setOriginError(''); }} accessibilityRole="button">
           <Icon name="location-outline" color="#FFFFFF" size={20} />
           <Text style={styles.notifyButtonText}>Choose search location</Text>
@@ -982,7 +927,7 @@ export default function FindWorkersScreen({
         <Pressable style={StyleSheet.absoluteFill} onPress={() => setOriginPickerOpen(false)} accessibilityRole="button" accessibilityLabel="Close location picker" />
         <View style={styles.filterSheet}>
           <View style={styles.filterHeading}>
-            <Text style={styles.filterTitle}>Search location</Text>
+            <Text style={styles.filterTitle}>Choose location</Text>
             <Pressable onPress={() => setOriginPickerOpen(false)} accessibilityRole="button" accessibilityLabel="Close">
               <Icon name="close" size={23} color={colors.muted} />
             </Pressable>
@@ -995,7 +940,7 @@ export default function FindWorkersScreen({
                   <View style={styles.originFarmCopy}>
                     <Text style={styles.originFarmName}>{farm.name}</Text>
                     <Text style={styles.originHelp}>{farm.address}</Text>
-                    <Text style={styles.originFarmStatus}>{hasFarmCoordinates(farm) ? 'Location saved' : 'Choose a village or set a map pin'}</Text>
+                    <Text style={styles.originFarmStatus}>{hasFarmCoordinates(farm) ? 'GPS pin saved' : 'No GPS pin yet'}</Text>
                   </View>
                   <Icon name={hasFarmCoordinates(farm) ? 'checkmark-circle' : 'chevron-forward'} size={20} color={colors.primary} />
                 </Pressable>
@@ -1008,29 +953,7 @@ export default function FindWorkersScreen({
                 <Text style={styles.originHelp}>{pinFarmId ? 'Stand at the farm before saving its map pin.' : 'Used only as the starting point for this search.'}</Text>
               </View>
             </Pressable>
-            <Text style={styles.filterSectionTitle}>Or enter a village</Text>
-            <View style={styles.searchBox}>
-              <Icon name="search-outline" size={20} color={colors.muted} />
-              <AppTextInput
-                style={styles.searchInput}
-                value={originQuery}
-                onChangeText={(value) => {
-                  setOriginQuery(value);
-                  setOriginError('');
-                  if (!pinFarmId) setOriginFarmId(null);
-                }}
-                placeholder="Village, town, or farm"
-                placeholderTextColor={colors.muted}
-                accessibilityLabel="Search for a village or farm location"
-              />
-              {originLoading && <ActivityIndicator color={colors.primary} />}
-            </View>
-            {originPredictions.map((prediction) => (
-              <Pressable key={prediction.placeId} style={styles.originPrediction} onPress={() => { void chooseVillage(prediction); }} accessibilityRole="button">
-                <Icon name="location-outline" size={18} color={colors.primary} />
-                <Text style={styles.originPredictionText}>{prediction.text}</Text>
-              </Pressable>
-            ))}
+            <Text style={styles.originHelp}>To add a pin to a farm, select it and use GPS while standing there. You can also use your current phone location for this search.</Text>
             {!!originError && <Text style={styles.errorText} accessibilityRole="alert">{originError}</Text>}
           </ScrollView>
         </View>
@@ -1253,8 +1176,6 @@ const styles = StyleSheet.create({
   originFarmName: { color: colors.text, fontSize: 15, fontWeight: '700' },
   originFarmStatus: { color: colors.primary, fontSize: 11, fontWeight: '700', marginTop: 4 },
   currentLocationButton: { minHeight: 66, flexDirection: 'row', alignItems: 'center', gap: 11, padding: 13, marginBottom: 17, borderRadius: 16, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface },
-  originPrediction: { minHeight: 50, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 10, borderBottomWidth: 1, borderBottomColor: colors.border },
-  originPredictionText: { flex: 1, color: colors.text, fontSize: 14 },
   resetText: { color: colors.muted, fontSize: 16, fontWeight: '600' },
   filterSection: { marginBottom: 19 },
   filterSectionTitle: { color: colors.muted, fontSize: 16, fontWeight: '700', marginBottom: 10 },

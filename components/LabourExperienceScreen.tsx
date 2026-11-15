@@ -7,7 +7,6 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import * as ImagePicker from 'expo-image-picker';
 import { ProfileDetails, updateProfile, uploadProfileImage, UserProfile } from '../api/profile';
-import { reverseGeocodeLocation } from '../api/places';
 import { fetchWorkerRequests } from '../api/requests';
 import { fetchLabourGroup } from '../api/groups';
 import { colors } from '../theme';
@@ -288,8 +287,6 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
         return;
       }
       const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const details = await reverseGeocodeLocation(current.coords.latitude, current.coords.longitude);
-      setArea(details.address);
       setLocationCoordinates({ latitude: current.coords.latitude, longitude: current.coords.longitude });
       setLocationDirty(true);
       setLocationSaved(false);
@@ -569,7 +566,7 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
         <Field label="Village" value={area} onChangeText={(value) => { setArea(value); setLocationCoordinates(null); setLocationDirty(true); setLocationSaved(false); }} placeholder="Village or taluk" />
         <Pressable style={styles.secondaryButton} onPress={() => { void captureWorkLocation(); }} disabled={locating} accessibilityRole="button">
           {locating ? <ActivityIndicator color={colors.primary} /> : <Icon name="location-outline" size={18} color={colors.primary} />}
-          <Text style={styles.secondaryButtonText}>{locating ? 'Finding location…' : locationCoordinates ? 'Location selected for nearby search' : locationSaved ? 'Location saved for nearby search' : 'Use my current location'}</Text>
+          <Text style={styles.secondaryButtonText}>{locating ? 'Finding location…' : locationCoordinates ? 'GPS location selected for nearby search' : locationSaved ? 'GPS location saved for nearby search' : 'Use GPS for nearby search'}</Text>
         </Pressable>
         <Field label="How far can you travel? (km)" value={travelRadius} onChangeText={setTravelRadius} placeholder="Enter distance in km" keyboardType="number-pad" />
         <Field label="Your daily rate (₹ per day)" value={rate} onChangeText={setRate} placeholder="Enter your rate" keyboardType="number-pad" />

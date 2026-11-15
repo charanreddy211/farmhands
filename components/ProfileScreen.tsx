@@ -7,7 +7,6 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
 import { fetchProfile, ProfileDetails, updateProfile, uploadProfileImage, UserProfile } from '../api/profile';
-import { reverseGeocodeLocation } from '../api/places';
 import { BookingListItem, fetchBookings } from '../api/requests';
 import { fetchSavedWorkers } from '../api/workers';
 import { colors } from '../theme';
@@ -187,19 +186,19 @@ export default function ProfileScreen({ userId, phone, onBack, onProfileChange, 
     try {
       const permission = await Location.requestForegroundPermissionsAsync();
       if (!permission.granted) {
-        setError('Allow location access to use your current location as your home address.');
+        setError('Allow location access to add a GPS map pin to your home address.');
         return;
       }
 
       const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       const { latitude, longitude } = location.coords;
-      const { address, mapLink } = await reverseGeocodeLocation(latitude, longitude);
+      const mapLink = `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
 
       if (draft) {
-        setDraft({ ...draft, homeAddress: address, homeAddressMapLink: mapLink });
+        setDraft({ ...draft, homeAddressMapLink: mapLink });
       }
-    } catch {
-      setError('Could not find the area name for your location. Check your connection and Google Geocoding API configuration, then try again.');
+    } catch (locationError) {
+      setError(locationError instanceof Error ? locationError.message : 'Could not get your current location. Please try again.');
     } finally {
       setLocating(false);
     }
@@ -313,7 +312,14 @@ export default function ProfileScreen({ userId, phone, onBack, onProfileChange, 
           <Field label="First name" value={draft.firstName} onChangeText={(firstName) => setDraft({ ...draft, firstName })} />
           <Field label="Last name" value={draft.lastName} onChangeText={(lastName) => setDraft({ ...draft, lastName })} />
         </View>
-        <AddressSelect label="Home address" value={draft.homeAddress} onPress={() => { void useCurrentLocation(); }} loading={locating} />
+        <AddressSelect
+          label="Home address"
+          value={draft.homeAddress}
+          hasMapPin={Boolean(draft.homeAddressMapLink)}
+          onChangeText={(homeAddress) => setDraft({ ...draft, homeAddress, homeAddressMapLink: null })}
+          onPress={() => { void useCurrentLocation(); }}
+          loading={locating}
+        />
         <Field label="Email" value={draft.email ?? ''} onChangeText={(email) => setDraft({ ...draft, email })} keyboardType="email-address" autoCapitalize="none" />
         <Text style={styles.fieldLabel}>I am a</Text>
         <View style={styles.roleChoices}>
@@ -554,15 +560,28 @@ function FarmBanner({ name, address }: { name: string; address: string }) {
   </View>;
 }
 
-function AddressSelect({ label, value, onPress, loading }: { label: string; value: string; onPress: () => void; loading: boolean }) {
+function AddressSelect({ label, value, hasMapPin, onChangeText, onPress, loading }: {
+  label: string;
+  value: string;
+  hasMapPin: boolean;
+  onChangeText: (value: string) => void;
+  onPress: () => void;
+  loading: boolean;
+}) {
   return <View style={styles.field}>
     <Text style={styles.fieldLabel}>{label}</Text>
+    <AppTextInput
+      style={styles.input}
+      value={value}
+      onChangeText={onChangeText}
+      placeholder="Village, town or area"
+      placeholderTextColor={colors.muted}
+    />
     <Pressable style={styles.addressSelect} onPress={onPress} disabled={loading} accessibilityRole="button">
-      <Icon name="locate-outline" size={17} />
-      <Text style={[styles.addressSelectText, !value && styles.addressPlaceholder]} numberOfLines={2}>{value || 'Use your current location'}</Text>
-      <Text style={styles.addressActionText}>{loading ? 'Locating…' : 'Use location'}</Text>
+      {loading ? <ActivityIndicator color={colors.primary} /> : <Icon name="locate-outline" size={17} />}
+      <Text style={styles.addressSelectText}>{loading ? 'Getting GPS location…' : hasMapPin ? 'GPS map pin saved' : 'Set map pin from GPS'}</Text>
     </Pressable>
-    <Text style={styles.addressHint}>Uses your device location to set your address and map pin.</Text>
+    <Text style={styles.addressHint}>Enter the area name manually. GPS saves a map pin without an address lookup.</Text>
   </View>;
 }
 
@@ -664,8 +683,6 @@ const styles = StyleSheet.create({
   formRow: { flexDirection: 'row', gap: 9, marginTop: 12 },
   addressSelect: { minHeight: 52, borderWidth: 1, borderColor: colors.border, borderRadius: 17, paddingHorizontal: 13, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: colors.surface },
   addressSelectText: { flex: 1, color: colors.text, fontSize: 13 },
-  addressPlaceholder: { color: colors.muted },
-  addressActionText: { color: colors.primary, fontSize: 11, fontWeight: '700' },
   addressHint: { color: colors.muted, fontSize: 11, marginTop: 5 },
   formActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 8 },
   cancelButton: { minHeight: 46, paddingHorizontal: 15, justifyContent: 'center', borderRadius: 23 },
