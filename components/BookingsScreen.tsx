@@ -283,7 +283,7 @@ export default function BookingsScreen({ farmerId, alertCount, alertCountError, 
           : items[bucket].length === 0 ? <View style={styles.emptyState}>
             <View style={styles.emptyIcon}><Icon name={bucket === 'past' ? 'time-outline' : 'reader-outline'} size={38} color={colors.primary} /></View>
             <Text style={styles.emptyTitle}>{bucket === 'upcoming' ? 'No bookings yet' : bucket === 'pending' ? 'No pending replies' : 'No past bookings'}</Text>
-            <Text style={styles.emptyText}>{bucket === 'upcoming' ? 'Find free workers for your dates and send a request.' : bucket === 'pending' ? 'Requests waiting for a worker reply will appear here.' : 'Completed, cancelled, and expired work will appear here.'}</Text>
+            <Text style={styles.emptyText}>{bucket === 'upcoming' ? 'Find workers and send a request.' : bucket === 'pending' ? 'Waiting requests appear here.' : 'Past work appears here.'}</Text>
             {bucket === 'upcoming' && <PrimaryButton label="Find workers" onPress={onFindWorkers} disabled={false} />}
           </View> : items[bucket].map((item) => <BookingCard
             key={`${item.request.id}-${item.booking?.workerId ?? item.worker?.id ?? item.type}`}

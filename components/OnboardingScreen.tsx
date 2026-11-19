@@ -141,7 +141,7 @@ export default function OnboardingScreen({ userId, profile, onProfileChange }: P
         {locating ? <ActivityIndicator color="#2563EB" /> : <Ionicons name="locate-outline" size={18} color="#2563EB" />}
         <Text style={styles.locationText}>{locating ? 'Finding location…' : mapLink ? 'GPS map pin saved' : 'Set map pin from GPS'}</Text>
       </Pressable>
-      <Text style={styles.hint}>Enter your village or area above. GPS saves a map pin; no address lookup is needed.</Text>
+      <Text style={styles.hint}>Enter your village or area.</Text>
     </>}
 
     {!!error && <Text style={styles.error} accessibilityRole="alert">{error}</Text>}

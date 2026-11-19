@@ -343,7 +343,7 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.safe}>
-      <StatusBar style="dark" />
+      <StatusBar style="dark" backgroundColor="#FFFFFF" translucent={false} />
       <LinearGradient
         colors={[colors.screenTop, colors.primarySoft, colors.background]}
         locations={[0, 0.28, 0.64]}

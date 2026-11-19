@@ -1,0 +1,13 @@
+{
+  "build": {
+    "preview": {
+      "distribution": "internal",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://farmhands-73ad.onrender.com/api"
+      },
+      "android": {
+        "buildType": "apk"
+      }
+    }
+  }
+}

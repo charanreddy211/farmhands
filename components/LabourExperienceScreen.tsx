@@ -691,7 +691,7 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
             setError('');
           }} disabled={bookingsLoading || !!bookingsError} accessibilityRole="button"><Text style={styles.outlineChipText}>Clear all</Text></Pressable>
         </View>
-        <Text style={styles.helperText}>Tap an open date to choose solo or your ready group. Booked and expired dates are locked.</Text>
+        <Text style={styles.helperText}>Tap a date. Booked dates are locked.</Text>
       </>}
 
       {screen === 'home' && <>
@@ -699,7 +699,7 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
           <View style={styles.weeklyHeading}>
             <View style={styles.availabilityCopy}>
               <Text style={styles.cardHeading}>Next 7 days</Text>
-              <Text style={styles.cardText}>Starting today. Choose when farmers can book you.</Text>
+              <Text style={styles.cardText}>Choose booking dates.</Text>
             </View>
             <View style={styles.availabilityCount}>
               <Text style={styles.availabilityCountValue}>{weeklyAvailableCount} of 7</Text>
@@ -744,8 +744,8 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
             <Text style={styles.cardText}>{groupLoading
               ? 'Loading group size…'
               : groupError
-                ? 'Group size unavailable; selected days are still open for solo work.'
-                : 'Choose solo or your ready group for each date.'}</Text>
+                ? 'Group unavailable; solo work is still open.'
+                : 'Choose solo or your group per date.'}</Text>
             {!!groupError && <Pressable onPress={() => { void reloadGroupSize(); }} disabled={groupLoading} accessibilityRole="button">
               <Text style={styles.calendarLink}>Retry</Text>
             </Pressable>}

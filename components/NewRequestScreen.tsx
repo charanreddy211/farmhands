@@ -263,7 +263,7 @@ export default function NewRequestScreen({ farmerId, profile, selectedWorkers, i
       <ScrollView contentContainerStyle={styles.successContent}>
         <View style={styles.successIcon}><Icon name="checkmark" size={44} color={colors.success} /></View>
         <Text style={styles.successTitle}>Request saved</Text>
-        <Text style={styles.successSubtitle}>Your request is now recorded. Worker response and alert delivery will be available in a later step.</Text>
+        <Text style={styles.successSubtitle}>Request posted. Worker replies appear later.</Text>
         <View style={styles.summaryCard}>
           {selectedWorkers.map((worker) => <SummaryRow key={worker.id} icon="people-outline" label={worker.name} value={workerSelectionSummary(worker)} />)}
           <SummaryRow icon="calendar-outline" label="Dates" value={dateRangeLabel(createdRequest.startDate, createdRequest.endDate)} />

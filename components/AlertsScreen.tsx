@@ -84,7 +84,7 @@ export default function AlertsScreen({ farmerId, onAlertsViewed, onBack, onFindW
         : alerts.length === 0 ? <View style={styles.emptyCard}>
           <Ionicons name="notifications-outline" size={36} color={colors.primary} />
           <Text style={styles.emptyTitle}>No updates yet</Text>
-          <Text style={styles.emptyText}>Worker replies, completed jobs, and matching search alerts will appear here.</Text>
+          <Text style={styles.emptyText}>Replies and job alerts appear here.</Text>
         </View> : alerts.map((alert) => {
           const tone = alertTone(alert.type);
           const actionLabel = alert.type === 'availability' ? 'View workers'

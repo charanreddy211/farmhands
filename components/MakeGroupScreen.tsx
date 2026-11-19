@@ -82,7 +82,7 @@ export default function MakeGroupScreen({ leaderId, leaderName, onBack }: Props)
         </Pressable>
         <View style={styles.headerCopy}><Text style={styles.kicker}>YOUR CREW</Text><Text style={styles.title}>My work group</Text></View>
       </View>
-      <Text style={styles.subtitle}>Add your crew and mark who is ready to work. Choose solo or your ready group separately for each available date.</Text>
+      <Text style={styles.subtitle}>Add your crew and mark who is ready.</Text>
 
       {loading ? <View style={styles.loading}><ActivityIndicator color="#2563EB" /><Text style={styles.hint}>Loading your saved group…</Text></View> : <>
         <View style={styles.summaryCard}>

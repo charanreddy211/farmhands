@@ -15,10 +15,20 @@
     "ios": {
       "supportsTablet": true
     },
+    "androidStatusBar": {
+      "barStyle": "dark-content",
+      "backgroundColor": "#FFFFFF",
+      "translucent": false
+    },
     "android": {
+      "package": "com.farmhands.app",
       "adaptiveIcon": {
         "backgroundColor": "#F6F1E8"
-      }
+      },
+      "permissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
     },
     "web": {
       "bundler": "metro"
@@ -31,6 +41,12 @@
           "locationWhenInUsePermission": "Allow Farmhands to use your location to set your home address."
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "d2b676d7-d01c-4312-a612-26e50c6c530f"
+      }
+    },
+    "owner": "charan211"
   }
 }

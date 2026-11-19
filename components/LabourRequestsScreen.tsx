@@ -292,7 +292,7 @@ export default function LabourRequestsScreen({ workerId, onBackToHome, onOpenPro
           : activeRequests.length === 0 ? <View style={styles.emptyCard}>
             <Icon name={bucket === 'new' ? 'mail-open-outline' : bucket === 'accepted' ? 'checkmark-circle-outline' : 'time-outline'} size={34} color={colors.primary} />
             <Text style={styles.emptyTitle}>{bucket === 'new' ? 'No new requests' : bucket === 'accepted' ? 'No accepted requests' : 'No past requests'}</Text>
-            <Text style={styles.emptyText}>{bucket === 'new' ? 'Requests sent to you by farmers will appear here.' : 'Your request history will appear here.'}</Text>
+            <Text style={styles.emptyText}>{bucket === 'new' ? 'Farmer requests appear here.' : 'Past requests appear here.'}</Text>
           </View> : activeRequests.map((item) => <RequestCard
             key={`${item.request.id}-${item.responseStatus}`}
             item={item}
