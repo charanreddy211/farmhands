@@ -5,8 +5,7 @@ import Text from './AppText';
 import AppTextInput from './AppTextInput';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import * as Location from 'expo-location';
-import { reverseGeocodeLocation } from '../api/places';
+import PlaceAutocompleteField from './PlaceAutocompleteField';
 import { fetchProfile, ProfileDetails, updateProfile, uploadProfileImage, UserProfile } from '../api/profile';
 import { BookingListItem, fetchBookings } from '../api/requests';
 import { fetchSavedWorkers } from '../api/workers';
@@ -40,7 +39,6 @@ export default function ProfileScreen({ userId, phone, onBack, onProfileChange, 
   const [saving, setSaving] = useState(false);
   const [editingProfile, setEditingProfile] = useState(false);
   const [selectedImage, setSelectedImage] = useState<ImagePicker.ImagePickerAsset | null>(null);
-  const [locating, setLocating] = useState(false);
   const [error, setError] = useState('');
   const [signingOut, setSigningOut] = useState(false);
   const [signOutError, setSignOutError] = useState('');
@@ -181,32 +179,9 @@ export default function ProfileScreen({ userId, phone, onBack, onProfileChange, 
     }
   }
 
-  async function useCurrentLocation() {
-    setLocating(true);
-    setError('');
-    try {
-      const permission = await Location.requestForegroundPermissionsAsync();
-      if (!permission.granted) {
-        setError('Allow location access to add a GPS map pin to your home address.');
-        return;
-      }
-
-      const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const place = await reverseGeocodeLocation(location.coords.latitude, location.coords.longitude);
-
-      if (draft) {
-        setDraft({ ...draft, homeAddress: place.address, homeAddressMapLink: place.mapLink });
-      }
-    } catch (locationError) {
-      setError(locationError instanceof Error ? locationError.message : 'Could not get your current location. Please try again.');
-    } finally {
-      setLocating(false);
-    }
-  }
-
   async function openMap(mapLink: string | null) {
     if (!mapLink) {
-      Alert.alert('Map link needed', 'Use your current location to add a map link to your home address.');
+      Alert.alert('Map link needed', 'Search for and select your farm location to add a map link.');
       return;
     }
     try {
@@ -312,13 +287,35 @@ export default function ProfileScreen({ userId, phone, onBack, onProfileChange, 
           <Field label="First name" value={draft.firstName} onChangeText={(firstName) => setDraft({ ...draft, firstName })} />
           <Field label="Last name" value={draft.lastName} onChangeText={(lastName) => setDraft({ ...draft, lastName })} />
         </View>
-        <AddressSelect
+        <PlaceAutocompleteField
           label="Home address"
           value={draft.homeAddress}
-          hasMapPin={Boolean(draft.homeAddressMapLink)}
-          onChangeText={(homeAddress) => setDraft({ ...draft, homeAddress, homeAddressMapLink: null })}
-          onPress={() => { void useCurrentLocation(); }}
-          loading={locating}
+          onChangeText={(homeAddress) => setDraft({
+            ...draft,
+            homeAddress,
+            homeAddressMapLink: null,
+            farms: draft.farms.map((farm, index) => index === 0
+              ? { ...farm, address: homeAddress, mapLink: null, latitude: null, longitude: null }
+              : farm),
+          })}
+          onSelect={(place) => {
+            const homeAddress = place.area ?? place.address;
+            setDraft({
+              ...draft,
+              homeAddress,
+              homeAddressMapLink: place.mapLink,
+              farms: draft.farms.map((farm, index) => index === 0
+                ? {
+                  ...farm,
+                  address: place.address,
+                  mapLink: place.mapLink,
+                  latitude: place.latitude,
+                  longitude: place.longitude,
+                }
+                : farm),
+            });
+          }}
+          hint={draft.homeAddressMapLink ? 'Location selected.' : 'Search and select your village.'}
         />
         <Field label="Email" value={draft.email ?? ''} onChangeText={(email) => setDraft({ ...draft, email })} keyboardType="email-address" autoCapitalize="none" />
         <Text style={styles.fieldLabel}>I am a</Text>
@@ -560,31 +557,6 @@ function FarmBanner({ name, address }: { name: string; address: string }) {
   </View>;
 }
 
-function AddressSelect({ label, value, hasMapPin, onChangeText, onPress, loading }: {
-  label: string;
-  value: string;
-  hasMapPin: boolean;
-  onChangeText: (value: string) => void;
-  onPress: () => void;
-  loading: boolean;
-}) {
-  return <View style={styles.field}>
-    <Text style={styles.fieldLabel}>{label}</Text>
-    <AppTextInput
-      style={styles.input}
-      value={value}
-      onChangeText={onChangeText}
-      placeholder="Village, town or area"
-      placeholderTextColor={colors.muted}
-    />
-    <Pressable style={styles.addressSelect} onPress={onPress} disabled={loading} accessibilityRole="button">
-      {loading ? <ActivityIndicator color={colors.primary} /> : <Icon name="locate-outline" size={17} />}
-      <Text style={styles.addressSelectText}>{loading ? 'Finding address…' : hasMapPin ? 'Address & pin saved' : 'Get address & map pin'}</Text>
-    </Pressable>
-      <Text style={styles.addressHint}>GPS fills your address and map pin.</Text>
-  </View>;
-}
-
 const styles = StyleSheet.create({
   page: { flex: 1, backgroundColor: colors.screenTop },
   content: { width: '100%', maxWidth: 480, alignSelf: 'center', paddingHorizontal: 16, paddingTop: 8, paddingBottom: 28 },
@@ -681,9 +653,6 @@ const styles = StyleSheet.create({
   input: { minHeight: 52, borderWidth: 1, borderColor: colors.border, borderRadius: 17, paddingHorizontal: 14, color: colors.text, backgroundColor: colors.surface, fontSize: 15 },
   multiline: { minHeight: 64, paddingTop: 9, textAlignVertical: 'top' },
   formRow: { flexDirection: 'row', gap: 9, marginTop: 12 },
-  addressSelect: { minHeight: 52, borderWidth: 1, borderColor: colors.border, borderRadius: 17, paddingHorizontal: 13, paddingVertical: 9, flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: colors.surface },
-  addressSelectText: { flex: 1, color: colors.text, fontSize: 13 },
-  addressHint: { color: colors.muted, fontSize: 11, marginTop: 5 },
   formActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 8 },
   cancelButton: { minHeight: 46, paddingHorizontal: 15, justifyContent: 'center', borderRadius: 23 },
   cancelText: { color: colors.muted, fontSize: 13, fontWeight: '700' },

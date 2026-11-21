@@ -4,9 +4,8 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Text from './AppText';
 import AppTextInput from './AppTextInput';
 import { Ionicons } from '@expo/vector-icons';
-import * as Location from 'expo-location';
 import * as ImagePicker from 'expo-image-picker';
-import { reverseGeocodeLocation } from '../api/places';
+import PlaceAutocompleteField from './PlaceAutocompleteField';
 import { ProfileDetails, updateProfile, uploadProfileImage, UserProfile } from '../api/profile';
 import { fetchWorkerRequests } from '../api/requests';
 import { fetchLabourGroup } from '../api/groups';
@@ -67,9 +66,7 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
     profile.labourLatitude !== null && profile.labourLongitude !== null
       ? { latitude: profile.labourLatitude, longitude: profile.labourLongitude }
       : null);
-  const [locationSaved, setLocationSaved] = useState(profile.labourLocationSet);
   const [locationDirty, setLocationDirty] = useState(false);
-  const [locating, setLocating] = useState(false);
   const [skills, setSkills] = useState(profile.labourSkills);
   const [newSkill, setNewSkill] = useState('');
   const [selectedDates, setSelectedDates] = useState(() => new Set(profile.labourAvailableDates.filter((date) => isAvailabilityDateCurrent(date, new Date()))));
@@ -260,7 +257,6 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
           && input.labourLongitude !== null && input.labourLongitude !== undefined
           ? { latitude: input.labourLatitude, longitude: input.labourLongitude }
           : null);
-        setLocationSaved(saved.labourLocationSet);
         setLocationDirty(false);
       }
       setSkills(saved.labourSkills);
@@ -275,28 +271,6 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
       setError(saveError instanceof Error ? saveError.message : 'Could not save your worker profile. Please try again.');
     } finally {
       setSaving(false);
-    }
-  }
-
-  async function captureWorkLocation() {
-    setLocating(true);
-    setError('');
-    try {
-      const permission = await Location.requestForegroundPermissionsAsync();
-      if (permission.status !== 'granted') {
-        setError('Allow location access to appear in nearby worker searches.');
-        return;
-      }
-      const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const place = await reverseGeocodeLocation(current.coords.latitude, current.coords.longitude);
-      setLocationCoordinates({ latitude: current.coords.latitude, longitude: current.coords.longitude });
-      setArea(place.area ?? place.address);
-      setLocationDirty(true);
-      setLocationSaved(false);
-    } catch (locationError) {
-      setError(locationError instanceof Error ? locationError.message : 'Could not get your work location. Please try again.');
-    } finally {
-      setLocating(false);
     }
   }
 
@@ -580,11 +554,17 @@ export default function LabourExperienceScreen({ userId, profile, initialScreen,
           <Text style={styles.secondaryButtonText}>Add skill</Text>
         </Pressable>
         <SkillChips skills={skills} onRemove={(skill) => setSkills((current) => current.filter((item) => item !== skill))} />
-        <Field label="Village" value={area} onChangeText={(value) => { setArea(value); setLocationCoordinates(null); setLocationDirty(true); setLocationSaved(false); }} placeholder="Village or taluk" />
-        <Pressable style={styles.secondaryButton} onPress={() => { void captureWorkLocation(); }} disabled={locating} accessibilityRole="button">
-          {locating ? <ActivityIndicator color={colors.primary} /> : <Icon name="location-outline" size={18} color={colors.primary} />}
-          <Text style={styles.secondaryButtonText}>{locating ? 'Finding address…' : locationCoordinates ? 'Address selected for nearby search' : locationSaved ? 'Location saved for nearby search' : 'Use GPS for nearby search'}</Text>
-        </Pressable>
+        <PlaceAutocompleteField
+          label="Village"
+          value={area}
+          onChangeText={(value) => { setArea(value); setLocationCoordinates(null); setLocationDirty(true); }}
+          onSelect={(place) => {
+            setArea(place.area ?? place.address);
+            setLocationCoordinates({ latitude: place.latitude, longitude: place.longitude });
+            setLocationDirty(true);
+          }}
+          hint="Search and select your village."
+        />
         <Field label="How far can you travel? (km)" value={travelRadius} onChangeText={setTravelRadius} placeholder="Enter distance in km" keyboardType="number-pad" />
         <Field label="Your daily rate (₹ per day)" value={rate} onChangeText={setRate} placeholder="Enter your rate" keyboardType="number-pad" />
       </>}

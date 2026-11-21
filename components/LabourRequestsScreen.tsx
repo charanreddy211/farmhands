@@ -336,7 +336,7 @@ export default function LabourRequestsScreen({ workerId, onBackToHome, onOpenPro
               : 'No places remain on this request. Refresh your requests to check for updates.'}
           </Text>
           <Text style={styles.helperText}>Distance to farm: {distanceLabel(selectedRequest?.distanceKm)}</Text>
-          {selectedRequest?.distanceKm == null && <Text style={styles.helperText}>Check both GPS pins and the route.</Text>}
+          {selectedRequest?.distanceKm == null && <Text style={styles.helperText}>Set both locations to show road distance.</Text>}
           {!!error && <Text style={styles.errorText} accessibilityRole="alert">{error}</Text>}
           <Pressable
             style={[styles.primaryButton, (!selectedRequest?.maxAcceptingPeople || responding) && styles.buttonDisabled]}

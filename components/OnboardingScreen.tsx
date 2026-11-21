@@ -3,9 +3,8 @@ import { ActivityIndicator, Pressable, ScrollView, StyleSheet, View } from 'reac
 import Text from './AppText';
 import AppTextInput from './AppTextInput';
 import { Ionicons } from '@expo/vector-icons';
-import * as Location from 'expo-location';
+import PlaceAutocompleteField from './PlaceAutocompleteField';
 import { ProfileDetails, updateProfile, UserProfile } from '../api/profile';
-import { reverseGeocodeLocation } from '../api/places';
 
 type Props = {
   userId: string;
@@ -23,25 +22,7 @@ export default function OnboardingScreen({ userId, profile, onProfileChange }: P
   const [address, setAddress] = useState(profile.homeAddress);
   const [mapLink, setMapLink] = useState(profile.homeAddressMapLink);
   const [loading, setLoading] = useState(false);
-  const [locating, setLocating] = useState(false);
   const [error, setError] = useState('');
-
-  async function useLocation() {
-    setLocating(true);
-    setError('');
-    try {
-      const permission = await Location.requestForegroundPermissionsAsync();
-      if (permission.status !== 'granted') throw new Error('Allow location access or enter your farm location manually.');
-      const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const place = await reverseGeocodeLocation(position.coords.latitude, position.coords.longitude);
-      setAddress(place.address);
-      setMapLink(place.mapLink);
-    } catch (locationError) {
-      setError(locationError instanceof Error ? locationError.message : 'Could not locate your farm. Enter the location manually.');
-    } finally {
-      setLocating(false);
-    }
-  }
 
   async function save() {
     if (!role) {
@@ -138,13 +119,16 @@ export default function OnboardingScreen({ userId, profile, onProfileChange }: P
       <Text style={styles.fieldLabel}>YOUR NAME</Text>
       <AppTextInput style={styles.input} value={firstName} onChangeText={setFirstName} placeholder="First name" autoComplete="given-name" />
       <AppTextInput style={styles.input} value={lastName} onChangeText={setLastName} placeholder="Last name" autoComplete="family-name" />
-      <Text style={[styles.fieldLabel, styles.locationLabel]}>FARM LOCATION</Text>
-      <AppTextInput style={styles.input} value={address} onChangeText={(value) => { setAddress(value); setMapLink(null); }} placeholder="Village, town or area" />
-      <Pressable style={styles.locationButton} onPress={() => { void useLocation(); }} disabled={locating} accessibilityRole="button">
-        {locating ? <ActivityIndicator color="#2563EB" /> : <Ionicons name="locate-outline" size={18} color="#2563EB" />}
-        <Text style={styles.locationText}>{locating ? 'Finding location…' : mapLink ? 'Address & pin saved' : 'Get address & map pin'}</Text>
-      </Pressable>
-      <Text style={styles.hint}>GPS fills your address and map pin.</Text>
+      <PlaceAutocompleteField
+        label="FARM LOCATION"
+        value={address}
+        onChangeText={(value) => { setAddress(value); setMapLink(null); }}
+        onSelect={(place) => {
+          setAddress(place.area ?? place.address);
+          setMapLink(place.mapLink);
+        }}
+        hint={mapLink ? 'Location selected.' : 'Search and select your village.'}
+      />
     </>}
 
     {!!error && <Text style={styles.error} accessibilityRole="alert">{error}</Text>}
@@ -184,9 +168,6 @@ const styles = StyleSheet.create({
   languageText: { color: '#0F172A', fontWeight: '600', fontSize: 17 },
   languageTranslation: { color: '#64748B', fontWeight: '500', fontSize: 14 },
   input: { minHeight: 54, borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 22, backgroundColor: '#FFFFFF', paddingHorizontal: 16, paddingVertical: 13, color: '#0F172A', fontSize: 16, marginBottom: 10 },
-  locationLabel: { marginTop: 16 },
-  locationButton: { minHeight: 52, borderRadius: 26, borderWidth: 1, borderColor: '#E2E8F0', backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 9 },
-  locationText: { color: '#0F172A', fontWeight: '700' },
   hint: { color: '#64748B', fontSize: 13, lineHeight: 18, marginTop: 8 },
   error: { color: '#A0443D', fontSize: 13, marginTop: 14 },
   actions: { flexDirection: 'row', gap: 10, marginTop: 'auto', paddingTop: 30 },

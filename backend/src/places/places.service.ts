@@ -13,7 +13,6 @@ type PlaceDetails = {
   longitude: number;
 };
 
-type ReverseGeocodeResult = PlaceDetails;
 export type Coordinates = { latitude: number; longitude: number };
 
 type RouteMatrixElement = {
@@ -36,7 +35,7 @@ export class PlacesService {
     const response = await this.googleRequest('https://places.googleapis.com/v1/places:autocomplete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Goog-FieldMask': 'suggestions.placePrediction.placeId,suggestions.placePrediction.text.text' },
-      body: JSON.stringify({ input: input.trim() }),
+      body: JSON.stringify({ input: input.trim(), includedRegionCodes: ['in'] }),
     });
     const result = await response.json() as {
       suggestions?: Array<{ placePrediction?: { placeId?: string; text?: { text?: string } } }>;
@@ -52,62 +51,29 @@ export class PlacesService {
     if (!/^[A-Za-z0-9_-]{1,200}$/.test(placeId)) throw new BadGatewayException('Invalid place selection.');
     const response = await this.googleRequest(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`, {
       method: 'GET',
-      headers: { 'X-Goog-FieldMask': 'formattedAddress,googleMapsUri,location' },
+      headers: { 'X-Goog-FieldMask': 'formattedAddress,googleMapsUri,location,addressComponents.longText,addressComponents.types' },
     });
     const result = await response.json() as {
       formattedAddress?: string;
       googleMapsUri?: string;
       location?: { latitude?: number; longitude?: number };
+      addressComponents?: Array<{ longText?: string; types?: string[] }>;
     };
     if (!result.formattedAddress || !result.googleMapsUri
       || result.location?.latitude === undefined || result.location.longitude === undefined) {
       throw new BadGatewayException('Google Places did not return an address, map link, and coordinates.');
     }
+    const areaTypes = ['locality', 'sublocality_level_1', 'administrative_area_level_3', 'administrative_area_level_2'];
+    const area = areaTypes
+      .map((type) => result.addressComponents?.find((component) => component.types?.includes(type))?.longText)
+      .find((value): value is string => Boolean(value?.trim()));
     return {
       address: result.formattedAddress,
+      area: area ?? result.formattedAddress.split(',')[0].trim(),
       mapLink: result.googleMapsUri,
       latitude: result.location.latitude,
       longitude: result.location.longitude,
     };
-  }
-
-  async reverseGeocode(latitude: number, longitude: number): Promise<ReverseGeocodeResult> {
-    if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90
-      || !Number.isFinite(longitude) || longitude < -180 || longitude > 180) {
-      throw new BadRequestException('A valid latitude and longitude are required.');
-    }
-    if (!this.apiKey) {
-      throw new ServiceUnavailableException('Google Geocoding is not configured. Set GOOGLE_MAPS_API_KEY on the backend.');
-    }
-
-    const url = new URL('https://maps.googleapis.com/maps/api/geocode/json');
-    url.searchParams.set('latlng', `${latitude},${longitude}`);
-    url.searchParams.set('key', this.apiKey);
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new BadGatewayException(`Google Geocoding request failed (${response.status}).`);
-    }
-
-    const result = await response.json() as {
-      status?: string;
-      results?: Array<{
-        formatted_address?: string;
-        place_id?: string;
-        address_components?: Array<{ long_name?: string; types?: string[] }>;
-      }>;
-    };
-    const match = result.results?.[0];
-    if (result.status !== 'OK' || !match?.formatted_address) {
-      throw new BadGatewayException('Google Geocoding could not find an area name for this location.');
-    }
-
-    const query = match.place_id ? `place_id:${match.place_id}` : `${latitude},${longitude}`;
-    const mapLink = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(query)}`;
-    const areaTypes = ['locality', 'sublocality_level_1', 'administrative_area_level_3', 'administrative_area_level_2'];
-    const area = areaTypes
-      .map((type) => match.address_components?.find((component) => component.types?.includes(type))?.long_name)
-      .find((value): value is string => Boolean(value?.trim()));
-    return { address: match.formatted_address, area: area ?? match.formatted_address.split(',')[0].trim(), mapLink, latitude, longitude };
   }
 
   async drivingDistances(origin: Coordinates, destinations: Coordinates[]): Promise<Array<number | null>> {

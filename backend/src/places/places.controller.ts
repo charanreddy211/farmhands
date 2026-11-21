@@ -1,4 +1,4 @@
-import { Controller, Get, Param, ParseFloatPipe, Query } from '@nestjs/common';
+import { Controller, Get, Param, Query } from '@nestjs/common';
 import { PlacesService } from './places.service';
 
 @Controller('places')
@@ -8,14 +8,6 @@ export class PlacesController {
   @Get('autocomplete')
   autocomplete(@Query('input') input: string) {
     return this.placesService.autocomplete(input);
-  }
-
-  @Get('reverse-geocode')
-  reverseGeocode(
-    @Query('latitude', ParseFloatPipe) latitude: number,
-    @Query('longitude', ParseFloatPipe) longitude: number,
-  ) {
-    return this.placesService.reverseGeocode(latitude, longitude);
   }
 
   @Get(':placeId')

@@ -30,9 +30,3 @@ export async function fetchPlaceDetails(placeId: string): Promise<PlaceDetails> 
   const response = await fetch(`${API_URL}/places/${encodeURIComponent(placeId)}`);
   return readResponse<PlaceDetails>(response);
 }
-
-export async function reverseGeocodeLocation(latitude: number, longitude: number): Promise<PlaceDetails> {
-  const query = new URLSearchParams({ latitude: String(latitude), longitude: String(longitude) });
-  const response = await fetch(`${API_URL}/places/reverse-geocode?${query}`);
-  return readResponse<PlaceDetails>(response);
-}
