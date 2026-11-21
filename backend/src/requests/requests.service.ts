@@ -9,8 +9,9 @@ import { Booking, BookingCancellationReason, BookingStatus } from './booking.ent
 import { BookingCancellationReasonDto } from './dto/cancel-booking.dto';
 import { User } from '../users/user.entity';
 import { labourAvailabilityRangeCapacity } from '../groups/group-capacity';
-import { distanceInKm } from '../common/distance';
+import type { Coordinates } from '../common/distance';
 import { currentFarmDate, isSameDayAvailabilityOpen } from '../common/farm-time';
+import { PlacesService } from '../places/places.service';
 
 export type RequestStatus = RequestEntity['status'];
 export type WorkerRequestBucket = 'new' | 'accepted' | 'past';
@@ -40,6 +41,7 @@ export class RequestsService {
     @InjectRepository(User)
     private readonly users: Repository<User>,
     private readonly dataSource: DataSource,
+    private readonly places: PlacesService,
   ) {}
 
   findAll(status?: RequestStatus): Promise<RequestEntity[]> {
@@ -181,25 +183,40 @@ export class RequestsService {
       if (bucket === 'accepted') return recipient.status === 'accepted' && booking?.status === 'confirmed' && !isPast;
       return recipient.status === 'pending' && !isPast && recipient.request.status === 'open';
     });
+    const workerCoordinates: Coordinates | null = typeof worker.labourLatitude === 'number' && Number.isFinite(worker.labourLatitude)
+      && typeof worker.labourLongitude === 'number' && Number.isFinite(worker.labourLongitude)
+      ? { latitude: worker.labourLatitude, longitude: worker.labourLongitude }
+      : null;
     const farmerIds = [...new Set(visible.map(({ request }) => request.farmerId).filter((id): id is string => Boolean(id)))];
     const farmers = farmerIds.length ? await this.users.find({ where: { id: In(farmerIds) } }) : [];
     const farmerById = new Map(farmers.map((farmer) => [farmer.id, farmer]));
-
-    return visible.map((recipient) => {
+    const destinationByRequestId = new Map<string, Coordinates>();
+    for (const recipient of visible) {
       const farmer = recipient.request.farmerId ? farmerById.get(recipient.request.farmerId) : undefined;
       const farm = recipient.request.farmLocationId
         ? farmer?.farms?.find((location) => location.id === recipient.request.farmLocationId)
         : undefined;
-      const workerCoordinates = typeof worker.labourLatitude === 'number' && Number.isFinite(worker.labourLatitude)
-        && typeof worker.labourLongitude === 'number' && Number.isFinite(worker.labourLongitude)
-        ? { latitude: worker.labourLatitude, longitude: worker.labourLongitude }
-        : null;
-      const farmCoordinates = typeof farm?.latitude === 'number' && Number.isFinite(farm.latitude)
-        && typeof farm.longitude === 'number' && Number.isFinite(farm.longitude)
-        ? { latitude: farm.latitude, longitude: farm.longitude }
-        : null;
-      const rawDistanceKm = workerCoordinates && farmCoordinates
-        ? distanceInKm(workerCoordinates, farmCoordinates)
+      if (typeof farm?.latitude === 'number' && Number.isFinite(farm.latitude)
+        && typeof farm.longitude === 'number' && Number.isFinite(farm.longitude)) {
+        destinationByRequestId.set(recipient.requestId, { latitude: farm.latitude, longitude: farm.longitude });
+      }
+    }
+    const uniqueDestinations = new Map<string, Coordinates>();
+    for (const coordinates of destinationByRequestId.values()) {
+      uniqueDestinations.set(`${coordinates.latitude},${coordinates.longitude}`, coordinates);
+    }
+    const destinationEntries = [...uniqueDestinations.entries()];
+    const roadDistances = workerCoordinates
+      ? await this.places.drivingDistances(workerCoordinates, destinationEntries.map(([, coordinates]) => coordinates))
+      : [];
+    const roadDistanceByDestination = new Map(destinationEntries.map(([key], index) => [key, roadDistances[index] ?? null]));
+
+    return visible.map((recipient) => {
+      const farmer = recipient.request.farmerId ? farmerById.get(recipient.request.farmerId) : undefined;
+      const farmCoordinates = destinationByRequestId.get(recipient.requestId);
+      const destinationKey = farmCoordinates ? `${farmCoordinates.latitude},${farmCoordinates.longitude}` : null;
+      const rawDistanceKm = workerCoordinates && destinationKey
+        ? roadDistanceByDestination.get(destinationKey) ?? null
         : null;
       return {
         request: {

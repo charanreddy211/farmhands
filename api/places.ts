@@ -7,6 +7,7 @@ export type PlacePrediction = {
 
 export type PlaceDetails = {
   address: string;
+  area?: string;
   mapLink: string;
   latitude: number;
   longitude: number;

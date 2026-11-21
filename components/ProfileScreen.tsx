@@ -6,6 +6,7 @@ import AppTextInput from './AppTextInput';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import * as Location from 'expo-location';
+import { reverseGeocodeLocation } from '../api/places';
 import { fetchProfile, ProfileDetails, updateProfile, uploadProfileImage, UserProfile } from '../api/profile';
 import { BookingListItem, fetchBookings } from '../api/requests';
 import { fetchSavedWorkers } from '../api/workers';
@@ -191,11 +192,10 @@ export default function ProfileScreen({ userId, phone, onBack, onProfileChange, 
       }
 
       const location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const { latitude, longitude } = location.coords;
-      const mapLink = `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
+      const place = await reverseGeocodeLocation(location.coords.latitude, location.coords.longitude);
 
       if (draft) {
-        setDraft({ ...draft, homeAddressMapLink: mapLink });
+        setDraft({ ...draft, homeAddress: place.address, homeAddressMapLink: place.mapLink });
       }
     } catch (locationError) {
       setError(locationError instanceof Error ? locationError.message : 'Could not get your current location. Please try again.');
@@ -579,9 +579,9 @@ function AddressSelect({ label, value, hasMapPin, onChangeText, onPress, loading
     />
     <Pressable style={styles.addressSelect} onPress={onPress} disabled={loading} accessibilityRole="button">
       {loading ? <ActivityIndicator color={colors.primary} /> : <Icon name="locate-outline" size={17} />}
-      <Text style={styles.addressSelectText}>{loading ? 'Getting GPS location…' : hasMapPin ? 'GPS map pin saved' : 'Set map pin from GPS'}</Text>
+      <Text style={styles.addressSelectText}>{loading ? 'Finding address…' : hasMapPin ? 'Address & pin saved' : 'Get address & map pin'}</Text>
     </Pressable>
-    <Text style={styles.addressHint}>Enter the area name manually. GPS saves a map pin without an address lookup.</Text>
+      <Text style={styles.addressHint}>GPS fills your address and map pin.</Text>
   </View>;
 }
 

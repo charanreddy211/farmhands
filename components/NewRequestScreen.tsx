@@ -50,7 +50,7 @@ function daysBetween(start: Date, end: Date): number {
 function workerSelectionSummary(worker: WorkerProfile): string {
   const people = worker.groupSize ?? 1;
   const distance = worker.distanceKm === null
-    ? 'GPS distance unavailable'
+    ? 'Driving distance unavailable'
     : `about ${worker.distanceKm.toFixed(1)} km away`;
   return `${people} ${people === 1 ? 'person' : 'people'} · ${distance}`;
 }
@@ -376,7 +376,7 @@ export default function NewRequestScreen({ farmerId, profile, selectedWorkers, i
       </>}
 
       {step === 'review' && <>
-        <Text style={styles.sectionSubtitle}>Distances are straight-line estimates from your Find workers location. Make sure it matches the farm selected below.</Text>
+        <Text style={styles.sectionSubtitle}>Driving distances use your Find workers location. Make sure it matches the farm below.</Text>
         <View style={styles.summaryCard}>
           {selectedWorkers.map((worker) => <SummaryRow key={worker.id} icon="people-outline" label={worker.name} value={workerSelectionSummary(worker)} />)}
           <SummaryRow icon="calendar-outline" label="Dates" value={startDate && endDate ? dateRangeLabel(dateInputValue(startDate), dateInputValue(endDate)) : ''} />

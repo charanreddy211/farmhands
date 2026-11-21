@@ -14,7 +14,7 @@ import { SavedWorker } from './saved-worker.entity';
 import { LabourGroup } from '../groups/labour-group.entity';
 import { labourAvailabilityCapacity, labourAvailabilityRangeCapacity, labourGroupCapacity } from '../groups/group-capacity';
 import { distanceInKm } from '../common/distance';
-import type { Coordinates } from '../common/distance';
+import { PlacesService } from '../places/places.service';
 import { currentFarmDate, filterCurrentAvailabilityDates, isSameDayAvailabilityOpen } from '../common/farm-time';
 
 type WorkerSearchInput = {
@@ -80,6 +80,7 @@ export class WorkersService {
     @InjectRepository(RequestRecipient) private readonly recipients: Repository<RequestRecipient>,
     @InjectRepository(LabourGroup) private readonly labourGroups: Repository<LabourGroup>,
     private readonly dataSource: DataSource,
+    private readonly places: PlacesService,
   ) {}
 
   async submitReview(input: CreateWorkerReviewDto) {
@@ -589,7 +590,8 @@ export class WorkersService {
       ? await this.labourGroups.find({ where: { leaderId: In(workerIds) } })
       : [];
     const groupsByLeader = new Map(groups.map((group) => [group.leaderId, group]));
-    const allMatching = workers.flatMap((worker) => {
+    const routeDistanceLimitKm = maxDistanceKm === undefined ? Number.POSITIVE_INFINITY : Math.max(20, maxDistanceKm);
+    const candidates = workers.flatMap((worker) => {
       const stats = reviewStats.get(worker.id) ?? { averageRating: null, reviewCount: 0 };
       if (minRating !== undefined && (stats.averageRating === null || stats.averageRating < minRating)) return [];
       if (input.skill && !worker.labourSkills.some((value) => value.toLocaleLowerCase() === input.skill?.trim().toLocaleLowerCase())) return [];
@@ -599,11 +601,12 @@ export class WorkersService {
       }
       if (workedWithIds && !workedWithIds.has(worker.id)) return [];
 
-      const distanceKm = center && worker.labourLatitude !== null && worker.labourLongitude !== null
-        ? distanceInKm(center, { latitude: worker.labourLatitude, longitude: worker.labourLongitude })
+      const coordinates = worker.labourLatitude !== null && worker.labourLongitude !== null
+        ? { latitude: worker.labourLatitude, longitude: worker.labourLongitude }
         : null;
-      if (center && distanceKm !== null
-        && worker.labourTravelRadius !== null && !isWithinDistance(distanceKm, worker.labourTravelRadius)) return [];
+      const directDistanceKm = center && coordinates ? distanceInKm(center, coordinates) : null;
+      if (directDistanceKm !== null && worker.labourTravelRadius !== null
+        && !isWithinDistance(directDistanceKm, worker.labourTravelRadius)) return [];
 
       const bookedDates = bookedDatesByWorker.get(worker.id) ?? new Set<string>();
       const availableDates = new Set(filterCurrentAvailabilityDates(worker.labourAvailableDates)
@@ -619,8 +622,6 @@ export class WorkersService {
         skills: worker.labourSkills,
         dailyRate: worker.labourDailyRate,
         travelRadius: worker.labourTravelRadius,
-        distanceKm: distanceKm === null ? null : Math.round(distanceKm * 10) / 10,
-        distanceKmRaw: distanceKm,
         available: requestedDates.length
           ? availableForRange
           : isSameDayAvailabilityOpen() && worker.labourAvailable && !bookedDates.has(currentFarmDate()),
@@ -640,6 +641,25 @@ export class WorkersService {
           farmerName: reviewByWorker.get(worker.id)?.farmerName ?? '',
           createdAt: reviewByWorker.get(worker.id)?.createdAt,
         } : null,
+        _coordinates: coordinates,
+        _needsRoute: directDistanceKm !== null && directDistanceKm <= routeDistanceLimitKm,
+        _travelRadiusKm: worker.labourTravelRadius,
+      }];
+    });
+    const routeCandidates = candidates.filter((worker) => worker._coordinates && worker._needsRoute);
+    const routeDestinations = routeCandidates.flatMap((worker) => worker._coordinates ? [worker._coordinates] : []);
+    const roadDistances = center
+      ? await this.places.drivingDistances(center, routeDestinations)
+      : [];
+    const roadDistanceByWorker = new Map(routeCandidates.map((worker, index) => [worker.id, roadDistances[index]]));
+    const allMatching = candidates.flatMap((candidate) => {
+      const { _coordinates, _needsRoute, _travelRadiusKm, ...worker } = candidate;
+      const distanceKmRaw = _needsRoute ? roadDistanceByWorker.get(worker.id) ?? null : null;
+      if (distanceKmRaw !== null && _travelRadiusKm !== null && !isWithinDistance(distanceKmRaw, _travelRadiusKm)) return [];
+      return [{
+        ...worker,
+        distanceKm: distanceKmRaw === null ? null : Math.round(distanceKmRaw * 10) / 10,
+        distanceKmRaw,
       }];
     });
     const ordered = allMatching.sort((left, right) => {
@@ -697,7 +717,7 @@ export class WorkersService {
       availablePeopleCount: matchingRange.filter((worker) => worker.available)
         .reduce((total, worker) => total + worker.groupSize, 0),
       rangeCounts,
-      unlocatedCount: center ? allMatching.filter((worker) => worker.distanceKmRaw === null).length : 0,
+      unlocatedCount: center ? candidates.filter((worker) => worker._coordinates === null).length : 0,
       availabilityByDate: [...availabilityByDate.entries()].map(([date, availability]) => ({
         date,
         ...availability,

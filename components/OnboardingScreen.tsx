@@ -5,6 +5,7 @@ import AppTextInput from './AppTextInput';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { ProfileDetails, updateProfile, UserProfile } from '../api/profile';
+import { reverseGeocodeLocation } from '../api/places';
 
 type Props = {
   userId: string;
@@ -32,7 +33,9 @@ export default function OnboardingScreen({ userId, profile, onProfileChange }: P
       const permission = await Location.requestForegroundPermissionsAsync();
       if (permission.status !== 'granted') throw new Error('Allow location access or enter your farm location manually.');
       const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      setMapLink(`https://www.google.com/maps/search/?api=1&query=${position.coords.latitude},${position.coords.longitude}`);
+      const place = await reverseGeocodeLocation(position.coords.latitude, position.coords.longitude);
+      setAddress(place.address);
+      setMapLink(place.mapLink);
     } catch (locationError) {
       setError(locationError instanceof Error ? locationError.message : 'Could not locate your farm. Enter the location manually.');
     } finally {
@@ -139,9 +142,9 @@ export default function OnboardingScreen({ userId, profile, onProfileChange }: P
       <AppTextInput style={styles.input} value={address} onChangeText={(value) => { setAddress(value); setMapLink(null); }} placeholder="Village, town or area" />
       <Pressable style={styles.locationButton} onPress={() => { void useLocation(); }} disabled={locating} accessibilityRole="button">
         {locating ? <ActivityIndicator color="#2563EB" /> : <Ionicons name="locate-outline" size={18} color="#2563EB" />}
-        <Text style={styles.locationText}>{locating ? 'Finding location…' : mapLink ? 'GPS map pin saved' : 'Set map pin from GPS'}</Text>
+        <Text style={styles.locationText}>{locating ? 'Finding location…' : mapLink ? 'Address & pin saved' : 'Get address & map pin'}</Text>
       </Pressable>
-      <Text style={styles.hint}>Enter your village or area.</Text>
+      <Text style={styles.hint}>GPS fills your address and map pin.</Text>
     </>}
 
     {!!error && <Text style={styles.error} accessibilityRole="alert">{error}</Text>}

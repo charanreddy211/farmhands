@@ -9,9 +9,10 @@ import { Booking } from '../requests/booking.entity';
 import { RequestRecipient } from '../requests/request-recipient.entity';
 import { SavedWorker } from './saved-worker.entity';
 import { LabourGroup } from '../groups/labour-group.entity';
+import { PlacesModule } from '../places/places.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([User, WorkerReview, WorkerSearchAlert, Booking, SavedWorker, RequestRecipient, LabourGroup])],
+  imports: [TypeOrmModule.forFeature([User, WorkerReview, WorkerSearchAlert, Booking, SavedWorker, RequestRecipient, LabourGroup]), PlacesModule],
   controllers: [WorkersController],
   providers: [WorkersService],
 })

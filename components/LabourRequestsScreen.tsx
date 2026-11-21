@@ -71,8 +71,8 @@ function declineReasonLabel(reason: RequestDeclineReason | null): string | null 
 
 function distanceLabel(distanceKm: number | null | undefined): string {
   return typeof distanceKm === 'number'
-    ? `${distanceKm.toFixed(1)} km (straight-line estimate)`
-    : 'Unavailable — GPS pin missing';
+    ? `${distanceKm.toFixed(1)} km (driving)`
+    : 'Driving distance unavailable';
 }
 
 export default function LabourRequestsScreen({ workerId, onBackToHome, onOpenProfile }: Props) {
@@ -336,7 +336,7 @@ export default function LabourRequestsScreen({ workerId, onBackToHome, onOpenPro
               : 'No places remain on this request. Refresh your requests to check for updates.'}
           </Text>
           <Text style={styles.helperText}>Distance to farm: {distanceLabel(selectedRequest?.distanceKm)}</Text>
-          {selectedRequest?.distanceKm == null && <Text style={styles.helperText}>Save GPS pins for your work location and the farmer’s farm to calculate distance.</Text>}
+          {selectedRequest?.distanceKm == null && <Text style={styles.helperText}>Check both GPS pins and the route.</Text>}
           {!!error && <Text style={styles.errorText} accessibilityRole="alert">{error}</Text>}
           <Pressable
             style={[styles.primaryButton, (!selectedRequest?.maxAcceptingPeople || responding) && styles.buttonDisabled]}

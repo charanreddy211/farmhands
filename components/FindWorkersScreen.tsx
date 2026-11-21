@@ -6,6 +6,7 @@ import AppTextInput from './AppTextInput';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { FarmLocation, updateProfile } from '../api/profile';
+import { reverseGeocodeLocation } from '../api/places';
 import { fetchWorkers, saveWorkerSearchAlert, WorkerProfile, WorkerSearchParams, WorkerSearchResponse } from '../api/workers';
 import { colors } from '../theme';
 
@@ -197,9 +198,17 @@ export default function FindWorkersScreen({
       .then(async (permission) => {
         if (permission.status !== 'granted') return;
         const current = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        if (active) {
-          setLocation({ latitude: current.coords.latitude, longitude: current.coords.longitude });
-          setOriginLabel('Current phone location');
+        const coordinates = { latitude: current.coords.latitude, longitude: current.coords.longitude };
+        if (!active) return;
+        setLocation(coordinates);
+        setOriginLabel('Current phone location');
+        try {
+          const place = await reverseGeocodeLocation(coordinates.latitude, coordinates.longitude);
+          if (active) setOriginLabel(place.address);
+        } catch (geocodeError) {
+          if (active) setOriginError(geocodeError instanceof Error
+            ? `Could not find your current address: ${geocodeError.message}`
+            : 'Could not find your current address.');
         }
       })
       .catch(() => {
@@ -335,12 +344,14 @@ export default function FindWorkersScreen({
       }
       const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       const coordinates = { latitude: position.coords.latitude, longitude: position.coords.longitude };
+      const place = await reverseGeocodeLocation(coordinates.latitude, coordinates.longitude);
       if (pinFarmId) {
         const updatedFarms = farms.map((farm) => farm.id === pinFarmId
           ? {
             ...farm,
+            address: place.address,
             ...coordinates,
-            mapLink: `https://www.google.com/maps/search/?api=1&query=${coordinates.latitude},${coordinates.longitude}`,
+            mapLink: place.mapLink,
           }
           : farm);
         const savedProfile = await updateProfile(farmerId, { farms: updatedFarms });
@@ -349,7 +360,7 @@ export default function FindWorkersScreen({
         setOriginLabel(farms.find((farm) => farm.id === pinFarmId)?.name ?? 'Selected farm');
       } else {
         setOriginFarmId(null);
-        setOriginLabel('Current phone location');
+        setOriginLabel(place.address);
       }
       setPinFarmId(null);
       setLocation(coordinates);
@@ -675,7 +686,7 @@ export default function FindWorkersScreen({
               <Icon name="chevron-down" size={15} color={colors.muted} />
             </Pressable>
           </View>
-          <Text style={styles.distanceHint}>About · straight-line</Text>
+          <Text style={styles.distanceHint}>Driving distance</Text>
         </View>
         <View style={styles.distanceChips}>
           {QUICK_DISTANCE_RANGES.map((range) => (
@@ -729,7 +740,7 @@ export default function FindWorkersScreen({
       {!location && !loading && <View style={styles.locationRequiredCard}>
         <View style={styles.emptyIcon}><Icon name="navigate-outline" size={30} color={colors.primary} /></View>
         <Text style={styles.emptyTitle}>Choose where to search from</Text>
-        <Text style={styles.emptyText}>Choose a farm with a saved GPS pin or enable phone location. Distances are approximate and workers’ exact coordinates aren’t shown.</Text>
+        <Text style={styles.emptyText}>Choose a farm or use phone location. Driving distances are estimates; exact worker locations stay private.</Text>
         <Pressable style={styles.notifyButton} onPress={() => { setOriginPickerOpen(true); setOriginError(''); }} accessibilityRole="button">
           <Icon name="location-outline" color="#FFFFFF" size={20} />
           <Text style={styles.notifyButtonText}>Choose search location</Text>
@@ -901,7 +912,7 @@ export default function FindWorkersScreen({
               <Icon name="close" size={23} color={colors.muted} />
             </Pressable>
           </View>
-          <Text style={styles.originHelp}>Choose the maximum straight-line distance from your search location.</Text>
+          <Text style={styles.originHelp}>Choose the maximum driving distance from your search location.</Text>
           <View style={styles.moreDistanceOptions}>
             {DISTANCE_RANGES.filter((range) => range > 5).map((range) => (
               <Pressable
